@@ -27,13 +27,36 @@ const app = express();
 // Middleware to handle CORS
 app.use(
   cors({
-    origin: [
-      process.env.FRONTEND_URL || "http://localhost:5173",
-      "https://task-manager-frontend.vercel.app",
-      "https://task-manager-frontend-git-main.vercel.app"
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
+      
+      // Allow localhost for development
+      if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+        return callback(null, true);
+      }
+      
+      // Allow Vercel domains
+      if (origin.includes('.vercel.app')) {
+        return callback(null, true);
+      }
+      
+      // Allow specific domains
+      const allowedOrigins = [
+        process.env.FRONTEND_URL,
+        "https://task-frontend-x8j5.vercel.app",
+        "https://task-manager-frontend.vercel.app"
+      ].filter(Boolean);
+      
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      
+      // Block other origins
+      callback(new Error('Not allowed by CORS'));
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
     credentials: true, // Allow cookies to be sent
   })
 );

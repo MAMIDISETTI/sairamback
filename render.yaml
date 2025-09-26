@@ -24,7 +24,7 @@ services:
       - key: ALLOWED_FILE_TYPES
         value: video/mp4,video/avi,video/mov
       - key: FRONTEND_URL
-        value: https://task-manager-frontend.vercel.app
+        value: https://task-frontend-x8j5.vercel.app
       - key: CLOUDINARY_CLOUD_NAME
         value: your-cloud-name
       - key: CLOUDINARY_API_KEY
