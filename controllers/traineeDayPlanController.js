@@ -54,8 +54,6 @@ const createTraineeDayPlan = async (req, res) => {
     try {
       traineeDayPlan = await TraineeDayPlan.create(dayPlanData);
       } catch (createError) {
-      console.error("Error creating day plan:", createError);
-      console.error("Create error details:", createError.message);
       return res.status(400).json({ 
         message: "Failed to create day plan", 
         error: createError.message 
@@ -86,7 +84,6 @@ const createTraineeDayPlan = async (req, res) => {
         } else {
           }
       } catch (notificationError) {
-        console.error("Error creating notification:", notificationError);
         // Don't fail the entire request if notification fails
       }
     }
@@ -97,8 +94,6 @@ const createTraineeDayPlan = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error creating trainee day plan:", error);
-    console.error("Error stack:", error.stack);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -210,7 +205,7 @@ const getTraineeDayPlans = async (req, res) => {
               }
             }
           } catch (err) {
-            console.error('Error fetching joiner for employee ID:', err);
+            // Error fetching joiner for employee ID - continue
           }
         }
         
@@ -284,7 +279,6 @@ const getTraineeDayPlans = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error fetching trainee day plans:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -326,7 +320,6 @@ const getTraineeDayPlan = async (req, res) => {
     res.json(dayPlan);
 
   } catch (error) {
-    console.error("Error fetching trainee day plan:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -370,7 +363,6 @@ const updateTraineeDayPlan = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error updating trainee day plan:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -437,7 +429,6 @@ const submitTraineeDayPlan = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error submitting trainee day plan:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -506,7 +497,6 @@ const reviewTraineeDayPlan = async (req, res) => {
       });
     } catch (notifyError) {
       // Do not fail the review due to notification issues
-      console.error('Notification error (reviewTraineeDayPlan):', notifyError?.message);
     }
 
     res.json({
@@ -515,10 +505,6 @@ const reviewTraineeDayPlan = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("=== REVIEW TRAINEE DAY PLAN ERROR ===");
-    console.error("Error reviewing trainee day plan:", error);
-    console.error("Error details:", error.message);
-    console.error("Error stack:", error.stack);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -551,7 +537,6 @@ const deleteTraineeDayPlan = async (req, res) => {
     res.json({ message: "Day plan deleted successfully" });
 
   } catch (error) {
-    console.error("Error deleting trainee day plan:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -569,7 +554,6 @@ const testDayPlans = async (req, res) => {
       dayPlans: dayPlans
     });
   } catch (error) {
-    console.error("Test error:", error);
     res.status(500).json({ message: "Test failed", error: error.message });
   }
 };
@@ -678,7 +662,6 @@ const submitEodUpdate = async (req, res) => {
         });
       }
     } catch (notificationError) {
-      console.error("Error creating EOD notification:", notificationError);
       // Don't fail the request if notification fails
     }
 
@@ -690,7 +673,6 @@ const submitEodUpdate = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error submitting EOD update:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -761,7 +743,7 @@ const reviewEodUpdate = async (req, res) => {
         relatedEntityType: 'user'
       });
     } catch (notifyErr) {
-      console.error('Notification error (reviewEodUpdate):', notifyErr?.message);
+      // Notification error - continue
     }
 
     res.json({
@@ -770,10 +752,6 @@ const reviewEodUpdate = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("=== EOD REVIEW ERROR ===");
-    console.error("Error reviewing EOD update:", error);
-    console.error("Error details:", error.message);
-    console.error("Error stack:", error.stack);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };

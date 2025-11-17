@@ -60,7 +60,6 @@ const createJoiner = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error creating joiner:', error);
     res.status(500).json({
       message: 'Server error',
       error: error.message
@@ -136,7 +135,6 @@ const getJoiners = async (req, res) => {
       total
     });
   } catch (error) {
-    console.error('Error fetching joiners:', error);
     res.status(500).json({
       message: 'Server error',
       error: error.message
@@ -173,7 +171,6 @@ const getJoinerById = async (req, res) => {
 
     res.json(joiner);
   } catch (error) {
-    console.error('Error fetching joiner:', error);
     res.status(500).json({
       message: 'Server error',
       error: error.message
@@ -254,9 +251,6 @@ const updateJoiner = async (req, res) => {
       joiner: updatedJoiner
     });
   } catch (error) {
-    console.error('=== UPDATE JOINER ERROR ===');
-    console.error('Error updating joiner:', error);
-    console.error('Error stack:', error.stack);
     res.status(500).json({
       message: 'Server error',
       error: error.message
@@ -298,7 +292,6 @@ const deleteJoiner = async (req, res) => {
       message: 'Joiner deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting joiner:', error);
     res.status(500).json({
       message: 'Server error',
       error: error.message
@@ -367,7 +360,6 @@ const createUserAccount = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error creating user account:', error);
     res.status(500).json({
       message: 'Server error',
       error: error.message
@@ -464,19 +456,6 @@ const getJoinerStats = async (req, res) => {
         }
       }
     ]);
-    console.log('=== JOINER STATUS DEBUG ===');
-    console.log('Query used:', query);
-    console.log('Joiner status distribution:', joinerStatusCounts);
-    
-    // Also log all joiners with their details
-    const allJoiners = await Joiner.find(query).select('name email status accountCreated');
-    console.log('All joiners details:', allJoiners.map(j => ({
-      name: j.name,
-      email: j.email,
-      status: j.status,
-      accountCreated: j.accountCreated
-    })));
-    console.log('=== END JOINER STATUS DEBUG ===');
 
     // Convert to simple YYYY-MM-DD format directly from year/month/day
     const processedDailyJoiners = dailyJoiners.map(item => {
@@ -518,7 +497,473 @@ const getJoinerStats = async (req, res) => {
       dailyJoiners: processedDailyJoiners
     });
   } catch (error) {
-    console.error('Error fetching joiner stats:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get candidate details by author_id (Personal Details from DB, Reports from DB if available)
+// @route   GET /api/joiners/candidate-details/:authorId
+// @access  Private (BOA)
+const getCandidateDetailsByAuthorId = async (req, res) => {
+  try {
+    const { authorId } = req.params;
+
+    if (!authorId) {
+      return res.status(400).json({
+        message: 'Author ID is required'
+      });
+    }
+
+    // Fetch Personal Details from database
+    let user = await User.findOne({ author_id: authorId }).select('-password -tempPassword');
+    
+    if (!user) {
+      // Try UserNew model as well
+      const UserNew = require('../models/UserNew');
+      user = await UserNew.findOne({ author_id: authorId }).select('-password -tempPassword');
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        message: 'Candidate not found with this Author ID'
+      });
+    }
+
+    // Fetch reports from database if available
+    const CandidateReport = require('../models/CandidateReport');
+    const existingReport = await CandidateReport.findOne({ author_id: authorId })
+      .sort({ uploadedAt: -1 })
+      .populate('uploadedBy', 'name email');
+
+    // Prepare Personal Details
+    const personalDetails = {
+      uid: user.author_id,
+      name: user.name,
+      phoneNumber: user.phone || user.phoneNumber || null,
+      emailId: user.email,
+      employeeId: user.employeeId || null,
+      doj: user.joiningDate || user.createdAt || null,
+      state: user.state || null,
+      highestQualification: user.qualification || null,
+      specialization: user.specialization || null,
+      haveMTechPC: user.haveMTechPC || null,
+      haveMTechOD: user.haveMTechOD || null,
+      yearOfPassing: user.yearOfPassing || null
+    };
+
+    // Prepare response
+    const responseData = {
+      personalDetails,
+      learningReport: existingReport?.learningReport || null,
+      attendanceReport: existingReport?.attendanceReport || null,
+      groomingReport: existingReport?.groomingReport || null,
+      interactionsReport: existingReport?.interactionsReport || null,
+      reportsUploaded: !!existingReport,
+      lastUploadedAt: existingReport?.uploadedAt || null,
+      uploadedBy: existingReport?.uploadedBy ? {
+        name: existingReport.uploadedBy.name,
+        email: existingReport.uploadedBy.email
+      } : null
+    };
+
+    res.status(200).json({
+      success: true,
+      message: 'Candidate details fetched successfully',
+      data: responseData
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Upload candidate reports from Google Sheets
+// @route   POST /api/joiners/candidate-details/:authorId/upload-reports
+// @access  Private (BOA)
+const uploadCandidateReports = async (req, res) => {
+  try {
+    const { authorId } = req.params;
+    const { googleSheetUrl } = req.body;
+
+    if (!authorId) {
+      return res.status(400).json({
+        message: 'Author ID is required'
+      });
+    }
+
+    if (!googleSheetUrl) {
+      return res.status(400).json({
+        message: 'Google Sheet URL is required'
+      });
+    }
+
+    // Verify user exists
+    let user = await User.findOne({ author_id: authorId });
+    if (!user) {
+      const UserNew = require('../models/UserNew');
+      user = await UserNew.findOne({ author_id: authorId });
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        message: 'Candidate not found with this Author ID'
+      });
+    }
+
+    const axios = require('axios');
+    const CandidateReport = require('../models/CandidateReport');
+    
+    try {
+      // Fetch data from Google Sheets with author_id parameter
+      const urlWithParams = `${googleSheetUrl}${googleSheetUrl.includes('?') ? '&' : '?'}author_id=${authorId}`;
+      const response = await axios.get(urlWithParams);
+      
+      // Check if response is HTML (error page)
+      if (typeof response.data === 'string' && response.data.includes('<!DOCTYPE html>')) {
+        return res.status(400).json({
+          message: 'Google Sheets URL returned HTML instead of JSON. Please check your Apps Script deployment.',
+          received: 'HTML'
+        });
+      }
+
+      const sheetData = response.data;
+
+      // Check if response is valid JSON object
+      if (typeof sheetData !== 'object' || sheetData === null) {
+        return res.status(400).json({
+          message: 'Invalid response from Google Sheets. Expected JSON object.',
+          received: typeof sheetData
+        });
+      }
+
+      // Extract reports from sheet data
+      const learningReport = sheetData.learningReport || sheetData['Learning Report'] || null;
+      const attendanceReport = sheetData.attendanceReport || sheetData['Attendance Report'] || null;
+      const groomingReport = sheetData.groomingReport || sheetData['Grooming Report'] || null;
+      const interactionsReport = sheetData.interactionsReport || sheetData['Interactions Report'] || null;
+
+      // Check if at least one report is available
+      if (!learningReport && !attendanceReport && !groomingReport && !interactionsReport) {
+        return res.status(400).json({
+          message: 'No report data found in Google Sheets for this candidate'
+        });
+      }
+
+      // Find existing report or create new one
+      let candidateReport = await CandidateReport.findOne({ author_id: authorId });
+
+      if (candidateReport) {
+        // Update existing report
+        candidateReport.learningReport = learningReport || candidateReport.learningReport;
+        candidateReport.attendanceReport = attendanceReport || candidateReport.attendanceReport;
+        candidateReport.groomingReport = groomingReport || candidateReport.groomingReport;
+        candidateReport.interactionsReport = interactionsReport || candidateReport.interactionsReport;
+        candidateReport.googleSheetUrl = googleSheetUrl;
+        candidateReport.uploadedBy = req.user.id;
+        candidateReport.uploadedAt = new Date();
+        candidateReport.lastUpdatedAt = new Date();
+        await candidateReport.save();
+      } else {
+        // Create new report
+        candidateReport = await CandidateReport.create({
+          author_id: authorId,
+          user: user._id,
+          learningReport,
+          attendanceReport,
+          groomingReport,
+          interactionsReport,
+          uploadedBy: req.user.id,
+          googleSheetUrl
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Candidate reports uploaded successfully',
+        data: {
+          learningReport: candidateReport.learningReport,
+          attendanceReport: candidateReport.attendanceReport,
+          groomingReport: candidateReport.groomingReport,
+          interactionsReport: candidateReport.interactionsReport,
+          uploadedAt: candidateReport.uploadedAt,
+          lastUpdatedAt: candidateReport.lastUpdatedAt
+        }
+      });
+
+    } catch (error) {
+      return res.status(400).json({
+        message: 'Failed to fetch data from Google Sheets',
+        error: error.message,
+        details: error.response?.data
+      });
+    }
+
+  } catch (error) {
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Validate Google Sheets for candidate reports
+// @route   POST /api/joiners/candidate-reports/validate-sheets
+// @access  Private (BOA)
+const validateCandidateReportsSheets = async (req, res) => {
+  try {
+    const axios = require('axios');
+    const { spread_sheet_name, data_sets_to_be_loaded, google_sheet_url } = req.body;
+
+    if (!spread_sheet_name || !data_sets_to_be_loaded) {
+      return res.status(400).json({ 
+        message: 'Missing required fields: spread_sheet_name, data_sets_to_be_loaded' 
+      });
+    }
+
+    let reportsData = [];
+
+    // If Google Sheet URL is provided, try to fetch data
+    if (google_sheet_url && google_sheet_url.trim()) {
+      try {
+        const response = await axios.get(google_sheet_url);
+        
+        // Check if response is HTML (error page)
+        if (typeof response.data === 'string' && response.data.includes('<!DOCTYPE html>')) {
+          return res.status(400).json({
+            message: 'Google Sheets URL returned HTML instead of JSON. Please check your Apps Script deployment.',
+            received: 'HTML',
+            suggestion: 'Make sure your Google Apps Script is properly deployed and returns JSON data'
+          });
+        }
+
+        const sheetData = response.data;
+
+        // Check if response is valid JSON object
+        if (typeof sheetData !== 'object' || sheetData === null) {
+          return res.status(400).json({
+            message: 'Invalid response from Google Sheets. Expected JSON object.',
+            received: typeof sheetData
+          });
+        }
+
+        // Extract reports data from Apps Script response
+        // Apps Script returns: { success: true, data: [{ author_id, learningReport, ... }] }
+        if (sheetData.success && sheetData.data && Array.isArray(sheetData.data)) {
+          reportsData = sheetData.data;
+        } else if (Array.isArray(sheetData)) {
+          reportsData = sheetData;
+        } else if (sheetData.data && Array.isArray(sheetData.data)) {
+          reportsData = sheetData.data;
+        } else {
+          // If no data array found, return empty array (manual entry mode)
+          reportsData = [];
+        }
+
+      } catch (error) {
+        return res.status(400).json({
+          message: 'Failed to fetch data from Google Sheets',
+          error: error.message,
+          details: error.response?.data
+        });
+      }
+    }
+
+    res.status(200).json({
+      message: 'Configuration validated successfully!',
+      spread_sheet_name: spread_sheet_name,
+      data_sets_to_be_loaded: data_sets_to_be_loaded,
+      data: {
+        spread_sheet_name: spread_sheet_name,
+        data_sets_to_be_loaded: data_sets_to_be_loaded,
+        data: reportsData
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message 
+    });
+  }
+};
+
+// @desc    Bulk upload candidate reports from Google Sheets
+// @route   POST /api/joiners/candidate-reports/bulk-upload
+// @access  Private (BOA)
+const bulkUploadCandidateReports = async (req, res) => {
+  try {
+    const { 
+      spread_sheet_name, 
+      data_sets_to_be_loaded, 
+      google_sheet_url,
+      candidate_reports_data 
+    } = req.body;
+
+    if (!spread_sheet_name || !data_sets_to_be_loaded) {
+      return res.status(400).json({
+        message: 'spread_sheet_name and data_sets_to_be_loaded are required'
+      });
+    }
+
+    const axios = require('axios');
+    const CandidateReport = require('../models/CandidateReport');
+    const User = require('../models/User');
+    const UserNew = require('../models/UserNew');
+
+    let reportsData = [];
+
+    // If Google Sheet URL is provided, fetch data from Google Sheets
+    if (google_sheet_url && google_sheet_url.trim()) {
+      try {
+        const response = await axios.get(google_sheet_url);
+        
+        if (typeof response.data === 'string' && response.data.includes('<!DOCTYPE html>')) {
+          return res.status(400).json({
+            message: 'Google Sheets URL returned HTML instead of JSON. Please check your Apps Script deployment.',
+            received: 'HTML'
+          });
+        }
+
+        const sheetData = response.data;
+
+        if (typeof sheetData !== 'object' || sheetData === null) {
+          return res.status(400).json({
+            message: 'Invalid response from Google Sheets. Expected JSON object.',
+            received: typeof sheetData
+          });
+        }
+
+        // Extract reports data from sheetData
+        // Expected structure: { data: [{ author_id, learningReport, attendanceReport, ... }, ...] }
+        if (sheetData.data && Array.isArray(sheetData.data)) {
+          reportsData = sheetData.data;
+        } else if (Array.isArray(sheetData)) {
+          reportsData = sheetData;
+        } else {
+          return res.status(400).json({
+            message: 'Invalid data structure from Google Sheets. Expected array of candidate reports.'
+          });
+        }
+
+      } catch (error) {
+        console.error('Google Sheets API error:', error);
+        return res.status(400).json({
+          message: 'Failed to fetch data from Google Sheets',
+          error: error.message,
+          details: error.response?.data
+        });
+      }
+    } else if (candidate_reports_data && Array.isArray(candidate_reports_data)) {
+      // Use provided data if no Google Sheet URL
+      reportsData = candidate_reports_data;
+    } else {
+      return res.status(400).json({
+        message: 'Either google_sheet_url or candidate_reports_data must be provided'
+      });
+    }
+
+    if (!reportsData || reportsData.length === 0) {
+      return res.status(400).json({
+        message: 'No candidate reports data found'
+      });
+    }
+
+    // Process each candidate report
+    const processedReports = [];
+    const errors = [];
+    let createdCount = 0;
+    let updatedCount = 0;
+
+    for (let i = 0; i < reportsData.length; i++) {
+      try {
+        const reportData = reportsData[i];
+        
+        if (!reportData.author_id) {
+          errors.push(`Row ${i + 1}: author_id is required`);
+          continue;
+        }
+
+        // Find user by author_id
+        let user = await User.findOne({ author_id: reportData.author_id });
+        if (!user) {
+          user = await UserNew.findOne({ author_id: reportData.author_id });
+        }
+
+        if (!user) {
+          errors.push(`Row ${i + 1}: User not found with author_id ${reportData.author_id}`);
+          continue;
+        }
+
+        // Extract reports
+        const learningReport = reportData.learningReport || reportData['Learning Report'] || null;
+        const attendanceReport = reportData.attendanceReport || reportData['Attendance Report'] || null;
+        const groomingReport = reportData.groomingReport || reportData['Grooming Report'] || null;
+        const interactionsReport = reportData.interactionsReport || reportData['Interactions Report'] || null;
+
+        // Check if at least one report is available
+        if (!learningReport && !attendanceReport && !groomingReport && !interactionsReport) {
+          errors.push(`Row ${i + 1}: No report data found for author_id ${reportData.author_id}`);
+          continue;
+        }
+
+        // Find existing report or create new one
+        let candidateReport = await CandidateReport.findOne({ author_id: reportData.author_id });
+
+        if (candidateReport) {
+          // Update existing report
+          candidateReport.learningReport = learningReport || candidateReport.learningReport;
+          candidateReport.attendanceReport = attendanceReport || candidateReport.attendanceReport;
+          candidateReport.groomingReport = groomingReport || candidateReport.groomingReport;
+          candidateReport.interactionsReport = interactionsReport || candidateReport.interactionsReport;
+          candidateReport.googleSheetUrl = google_sheet_url || candidateReport.googleSheetUrl;
+          candidateReport.uploadedBy = req.user.id;
+          candidateReport.uploadedAt = new Date();
+          candidateReport.lastUpdatedAt = new Date();
+          await candidateReport.save();
+          updatedCount++;
+        } else {
+          // Create new report
+          candidateReport = await CandidateReport.create({
+            author_id: reportData.author_id,
+            user: user._id,
+            learningReport,
+            attendanceReport,
+            groomingReport,
+            interactionsReport,
+            uploadedBy: req.user.id,
+            googleSheetUrl: google_sheet_url
+          });
+          createdCount++;
+        }
+
+        processedReports.push({
+          author_id: reportData.author_id,
+          name: user.name,
+          email: user.email
+        });
+
+      } catch (error) {
+        errors.push(`Row ${i + 1}: ${error.message}`);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully processed ${processedReports.length} candidate reports`,
+      createdCount,
+      updatedCount,
+      totalProcessed: processedReports.length,
+      errors: errors.length > 0 ? errors : undefined,
+      processedReports
+    });
+
+  } catch (error) {
     res.status(500).json({
       message: 'Server error',
       error: error.message
@@ -533,5 +978,9 @@ module.exports = {
   updateJoiner,
   deleteJoiner,
   createUserAccount,
-  getJoinerStats
+  getJoinerStats,
+  getCandidateDetailsByAuthorId,
+  uploadCandidateReports,
+  validateCandidateReportsSheets,
+  bulkUploadCandidateReports
 };

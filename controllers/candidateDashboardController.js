@@ -109,8 +109,6 @@ const getCandidateDashboardData = async (req, res) => {
         candidates.push(candidateData);
 
       } catch (error) {
-        // Log error for debugging
-        console.error(`Error processing candidate ${uid}:`, error.message);
         // Continue with other UIDs even if one fails
       }
     }
@@ -341,7 +339,7 @@ const getCandidateDashboardDetail = async (req, res) => {
         ]
       });
     } catch (err) {
-      console.error('Error fetching joiner:', err);
+      // Error fetching joiner - continue
     }
 
     // Personal Details
@@ -726,7 +724,6 @@ const getCandidateDashboardDetail = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching candidate detail:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',

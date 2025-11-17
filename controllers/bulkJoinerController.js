@@ -25,12 +25,10 @@ const validateGoogleSheets = async (req, res) => {
     // If Google Sheet URL is provided, try to fetch data
     if (google_sheet_url && google_sheet_url.trim()) {
       try {
-        console.log('Fetching data from Google Sheets URL:', google_sheet_url);
         const gsRes = await axios.get(google_sheet_url);
         
         // Check if response is HTML (error page)
         if (typeof gsRes.data === 'string' && gsRes.data.includes('<!DOCTYPE html>')) {
-          console.error('Google Sheets returned HTML instead of JSON');
           return res.status(400).json({
             message: 'Google Sheets URL returned HTML instead of JSON. Please check your Apps Script deployment.',
             received: 'HTML',
@@ -39,33 +37,9 @@ const validateGoogleSheets = async (req, res) => {
         }
 
         const sheetData = gsRes.data;
-        console.log('Google Sheets response structure:', {
-          type: typeof sheetData,
-          isArray: Array.isArray(sheetData),
-          keys: typeof sheetData === 'object' && sheetData !== null ? Object.keys(sheetData) : null,
-          hasData: !!sheetData.data,
-          dataLength: sheetData.data?.length,
-          spreadSheetName: sheetData.spread_sheet_name,
-          dataSets: sheetData.data_sets_to_be_loaded
-        });
-
-        // Debug: Log first record from Google Sheets to see phone_number issue
-        if (sheetData.data && Array.isArray(sheetData.data) && sheetData.data.length > 0) {
-          console.log('=== FIRST RECORD FROM GOOGLE SHEETS ===');
-          console.log('First record:', JSON.stringify(sheetData.data[0], null, 2));
-          console.log('First record phone_number:', sheetData.data[0].phone_number);
-          console.log('First record phone_number type:', typeof sheetData.data[0].phone_number);
-          console.log('All keys in first record:', Object.keys(sheetData.data[0]));
-          console.log('All values in first record:');
-          Object.keys(sheetData.data[0]).forEach(key => {
-            console.log(`  ${key}: ${sheetData.data[0][key]} (${typeof sheetData.data[0][key]})`);
-          });
-          console.log('========================================');
-        }
 
         // Check if response is valid JSON object
         if (typeof sheetData !== 'object' || sheetData === null) {
-          console.error('Invalid response type from Google Sheets:', typeof sheetData);
           return res.status(400).json({
             message: 'Invalid response from Google Sheets. Expected JSON object.',
             received: typeof sheetData,
@@ -121,7 +95,6 @@ const validateGoogleSheets = async (req, res) => {
               if (foundPhone !== null) {
                 // Convert to string if it's a number
                 record.phone_number = typeof foundPhone === 'number' ? foundPhone.toString() : foundPhone;
-                console.log(`Row ${index + 1}: Fixed phone_number from alternative field: ${record.phone_number}`);
               } else {
                 // Check all fields for numeric values that look like phone numbers (10 digits)
                 for (const [key, value] of Object.entries(record)) {
@@ -130,18 +103,12 @@ const validateGoogleSheets = async (req, res) => {
                     // Check if it looks like a phone number (10 digits, or starts with + and has 10+ digits)
                     if (/^[\+]?[0-9]{10,15}$/.test(numValue.replace(/[^\d+]/g, ''))) {
                       record.phone_number = numValue;
-                      console.log(`Row ${index + 1}: Found phone_number in field "${key}": ${record.phone_number}`);
                       break;
                     }
                   }
                 }
               }
               
-              // If still null, log a warning with all available fields
-              if (!record.phone_number || record.phone_number === null || record.phone_number === '') {
-                console.warn(`Row ${index + 1}: phone_number is still null. Available fields and values:`, 
-                  Object.entries(record).map(([k, v]) => `${k}: ${v} (${typeof v})`).join(', '));
-              }
             } else {
               // phone_number exists but might be a number - convert to string
               if (typeof record.phone_number === 'number') {
@@ -151,14 +118,12 @@ const validateGoogleSheets = async (req, res) => {
           });
         }
 
-        console.log('Google Sheets validation successful. Returning data with', sheetData.data?.length || 0, 'records');
         res.status(200).json({
           message: 'Google Sheets validation successful',
           data: sheetData
         });
 
       } catch (error) {
-        console.error('Google Sheets API error:', error);
         return res.status(400).json({
           message: 'Failed to fetch data from Google Sheets',
           error: error.message,
@@ -183,7 +148,6 @@ const validateGoogleSheets = async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Error validating Google Sheets:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
@@ -215,23 +179,6 @@ const bulkUploadJoiners = async (req, res) => {
       try {
         const joinerData = joiners_data[i];
         
-        // Debug: Log first row structure to understand the data format
-        if (i === 0) {
-          console.log('=== FIRST JOINER DATA DEBUG ===');
-          console.log('First joiner data structure:', JSON.stringify(joinerData, null, 2));
-          console.log('First joiner data keys:', Object.keys(joinerData));
-          console.log('phone_number value:', joinerData.phone_number);
-          console.log('phone_number type:', typeof joinerData.phone_number);
-          console.log('phone_number === null:', joinerData.phone_number === null);
-          console.log('phone_number === undefined:', joinerData.phone_number === undefined);
-          console.log('All phone_number related fields:');
-          Object.keys(joinerData).forEach(key => {
-            if (key.toLowerCase().includes('phone')) {
-              console.log(`  ${key}: ${joinerData[key]} (type: ${typeof joinerData[key]})`);
-            }
-          });
-          console.log('================================');
-        }
         
         // // Generate author_id
         const author_id = generateUUID();
@@ -337,19 +284,6 @@ const bulkUploadJoiners = async (req, res) => {
           }
         }
 
-        // Debug: Log the phone number value for first row
-        if (i === 0) {
-          console.log('=== PHONE NUMBER DEBUG ===');
-          console.log('Row 1 phone_number value:', phoneNumber);
-          console.log('Row 1 phone_number type:', typeof phoneNumber);
-          console.log('Row 1 phone_number raw:', joinerData.phone_number);
-          console.log('Row 1 phone_number raw type:', typeof joinerData.phone_number);
-          console.log('All field values:');
-          Object.keys(joinerData).forEach(key => {
-            console.log(`  ${key}: ${joinerData[key]} (${typeof joinerData[key]})`);
-          });
-          console.log('==========================');
-        }
 
         // Validate phone number exists and is not empty
         // Handle number 0 as valid (though unlikely for phone)
@@ -427,12 +361,6 @@ const bulkUploadJoiners = async (req, res) => {
       
       createdJoiners = await Joiner.insertMany(processedJoiners);
     } catch (dbError) {
-      console.error('Database insertion error:', dbError);
-      console.error('Error name:', dbError.name);
-      console.error('Error code:', dbError.code);
-      console.error('Error message:', dbError.message);
-      console.error('Error details:', dbError);
-      
       return res.status(500).json({
         message: 'Database insertion failed',
         error: dbError.message,
@@ -450,8 +378,6 @@ const bulkUploadJoiners = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error in bulk upload:', error);
-    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       message: 'Server error', 
       error: error.message,
@@ -485,7 +411,6 @@ const testGoogleSheets = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('URL test error:', error);
     res.status(400).json({
       message: 'URL test failed',
       error: error.message,

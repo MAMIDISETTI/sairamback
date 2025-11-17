@@ -7,7 +7,11 @@ const {
   updateJoiner,
   deleteJoiner,
   createUserAccount,
-  getJoinerStats
+  getJoinerStats,
+  getCandidateDetailsByAuthorId,
+  uploadCandidateReports,
+  validateCandidateReportsSheets,
+  bulkUploadCandidateReports
 } = require('../controllers/joinerController');
 const {
   validateGoogleSheets,
@@ -45,5 +49,17 @@ router.post('/:id/create-account', requireRoles(['boa', 'master_trainer']), crea
 router.get('/test-sheets', requireRoles(['boa']), testGoogleSheets);
 router.post('/validate-sheets', requireRoles(['boa']), validateGoogleSheets);
 router.post('/bulk-upload', requireRoles(['boa']), bulkUploadJoiners);
+
+// Get candidate details by author_id (BOA only)
+router.get('/candidate-details/:authorId', requireRoles(['boa']), getCandidateDetailsByAuthorId);
+
+// Upload candidate reports from Google Sheets (BOA only)
+router.post('/candidate-details/:authorId/upload-reports', requireRoles(['boa']), uploadCandidateReports);
+
+// Validate Google Sheets for candidate reports (BOA only)
+router.post('/candidate-reports/validate-sheets', requireRoles(['boa']), validateCandidateReportsSheets);
+
+// Bulk upload candidate reports from Google Sheets (BOA only)
+router.post('/candidate-reports/bulk-upload', requireRoles(['boa']), bulkUploadCandidateReports);
 
 module.exports = router;

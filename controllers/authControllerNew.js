@@ -122,10 +122,6 @@ const registerUser = async (req, res) => {
 
     res.status(201).json(responseData);
   } catch (error) {
-    console.error("=== REGISTRATION ERROR ===");
-    console.error("Error details:", error);
-    console.error("Error message:", error.message);
-    console.error("Error stack:", error.stack);
     res.status(500).json({ 
       message: "Server error during registration",
       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
@@ -168,8 +164,13 @@ const loginUser = async (req, res) => {
 
     // Get full user data with joiner information (only for UserNew)
     let fullUserData = null;
-    if (userModel === 'UserNew' && user.getFullData) {
-      fullUserData = await user.getFullData();
+    try {
+      if (userModel === 'UserNew' && user.getFullData && typeof user.getFullData === 'function') {
+        fullUserData = await user.getFullData();
+      }
+    } catch (joinerError) {
+      // If joiner data fetch fails, continue without it
+      fullUserData = null;
     }
 
     // Return user data with JWT
@@ -188,8 +189,13 @@ const loginUser = async (req, res) => {
 
     res.status(200).json(responseData);
   } catch (error) {
-    console.error("Login error:", error);
-    res.status(500).json({ message: "Server error during login" });
+    // Temporary error logging to debug login issue
+    console.error('Login error:', error.message);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      message: "Server error during login",
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
   }
 };
 
@@ -232,7 +238,7 @@ const getUserProfile = async (req, res) => {
         }
         
       } catch (err) {
-        console.error('Error fetching joiner:', err);
+        // Error fetching joiner - continue
       }
     }
 
@@ -271,9 +277,6 @@ const getUserProfile = async (req, res) => {
 
     res.status(200).json(responseData);
   } catch (error) {
-    console.error("Get profile error:", error);
-    console.error("Error details:", error.message);
-    console.error("Error stack:", error.stack);
     res.status(500).json({ 
       message: "Server error getting profile",
       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
@@ -310,7 +313,6 @@ const updateUserRole = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("Update role error:", error);
     res.status(500).json({ message: "Server error updating role" });
   }
 };
@@ -454,7 +456,6 @@ const updateUserProfile = async (req, res) => {
           await joiner.save();
         }
       } catch (joinerError) {
-        console.error('Error updating joiner:', joinerError);
         // Don't fail the request if joiner update fails
       }
     }
@@ -471,7 +472,7 @@ const updateUserProfile = async (req, res) => {
       try {
         joinerData = await Joiner.findById(updatedUser.joinerId);
       } catch (err) {
-        console.error('Error fetching joiner for response:', err);
+        // Error fetching joiner for response - continue
       }
     }
 
@@ -501,7 +502,6 @@ const updateUserProfile = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Update profile error:', error);
     res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };
@@ -566,7 +566,6 @@ const changePassword = async (req, res) => {
       message: "Password changed successfully"
     });
   } catch (error) {
-    console.error('Error changing password:', error);
     res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };

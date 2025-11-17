@@ -91,21 +91,6 @@ const getResults = async (req, res) => {
       .limit(queryLimit)
       .skip(querySkip);
 
-    // Debug logging for trainee queries
-    if (req.user.role === 'trainee') {
-      console.log('Trainee Results Query Debug:');
-      console.log('- Trainee ID:', req.user.id);
-      console.log('- Trainee author_id:', query.author_id);
-      console.log('- Query:', JSON.stringify(query, null, 2));
-      console.log('- Results found:', results.length);
-      if (results.length > 0) {
-        console.log('- Sample result:', {
-          exam_type: results[0].exam_type,
-          author_id: results[0].author_id,
-          trainee_name: results[0].trainee_name
-        });
-      }
-    }
 
     // Manually populate uploaded_by and trainer information using author_id
     const populatedResults = await Promise.all(results.map(async (result) => {
@@ -442,11 +427,9 @@ const bulkUploadResults = async (req, res) => {
              
              if (updatedUser) {
                // Success - user updated
-             } else {
-               console.error(`Failed to update fortnightExams for user ${user._id}`);
              }
            } catch (updateError) {
-             console.error(`Error updating fortnightExams for user ${user._id}:`, updateError);
+             // Error updating fortnightExams - continue
            }
          } else if (isDailyExam) {
            // Add to dailyQuizzes array

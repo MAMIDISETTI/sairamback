@@ -25,6 +25,7 @@ const adminRoutes = require("./routes/adminRoutes")
 const mcqDeploymentRoutes = require("./routes/mcqDeploymentRoutes")
 const trainerRoutes = require("./routes/trainerRoutes")
 const candidateDashboardRoutes = require("./routes/candidateDashboardRoutes")
+const candidateReportRoutes = require("./routes/candidateReportRoutes")
 
 const app = express();
 
@@ -98,6 +99,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/mcq-deployments", mcqDeploymentRoutes);
 app.use("/api/trainer", trainerRoutes);
 app.use("/api/admin/candidate-dashboard", candidateDashboardRoutes);
+app.use("/api/candidate-reports", candidateReportRoutes);
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
@@ -148,5 +150,6 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 // Start Server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  // Server started
+  console.log(`Server is running on port ${PORT}`);
 });
