@@ -26,6 +26,8 @@ const mcqDeploymentRoutes = require("./routes/mcqDeploymentRoutes")
 const trainerRoutes = require("./routes/trainerRoutes")
 const candidateDashboardRoutes = require("./routes/candidateDashboardRoutes")
 const candidateReportRoutes = require("./routes/candidateReportRoutes")
+const performersMetricsRoutes = require("./routes/performersMetricsRoutes")
+const googleSheetsSyncRoutes = require("./routes/googleSheetsSyncRoutes")
 
 const app = express();
 
@@ -102,6 +104,8 @@ app.use("/api/mcq-deployments", mcqDeploymentRoutes);
 app.use("/api/trainer", trainerRoutes);
 app.use("/api/admin/candidate-dashboard", candidateDashboardRoutes);
 app.use("/api/candidate-reports", candidateReportRoutes);
+app.use("/api/performers-metrics", performersMetricsRoutes);
+app.use("/api/sync", googleSheetsSyncRoutes);
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {

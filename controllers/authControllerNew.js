@@ -135,13 +135,18 @@ const loginUser = async (req, res) => {
     const { email, password } = req.body;
 
     // Check if user exists in UserNew model first
-    let user = await UserNew.findOne({ email });
+    // Use lean() for faster queries and select only needed fields
+    let user = await UserNew.findOne({ email })
+      .select('_id author_id name email password role profileImageUrl isActive passwordChanged tempPassword joinerId')
+      .lean();
     let userModel = 'UserNew';
     
     // If not found in UserNew, check old User model
     if (!user) {
       const User = require('../models/User');
-      user = await User.findOne({ email });
+      user = await User.findOne({ email })
+        .select('_id author_id name email password role profileImageUrl isActive passwordChanged tempPassword')
+        .lean();
       userModel = 'User';
     }
     
@@ -149,7 +154,7 @@ const loginUser = async (req, res) => {
       return res.status(401).json({ message: "Invalid email or password" });
     }
 
-    // Check password
+    // Check password (user is now a plain object from lean(), so access directly)
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({ message: "Invalid email or password" });
@@ -162,18 +167,8 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // Get full user data with joiner information (only for UserNew)
-    let fullUserData = null;
-    try {
-      if (userModel === 'UserNew' && user.getFullData && typeof user.getFullData === 'function') {
-        fullUserData = await user.getFullData();
-      }
-    } catch (joinerError) {
-      // If joiner data fetch fails, continue without it
-      fullUserData = null;
-    }
-
-    // Return user data with JWT
+    // Return user data with JWT immediately - don't wait for joiner data
+    // Joiner data can be fetched later if needed (lazy loading)
     const responseData = {
       _id: user._id,
       author_id: user.author_id || user._id.toString(), // Fallback for old User model
@@ -181,11 +176,25 @@ const loginUser = async (req, res) => {
       email: user.email,
       role: user.role,
       profileImageUrl: user.profileImageUrl,
-      joinerData: fullUserData?.joinerData || null,
       passwordChanged: user.passwordChanged !== undefined ? user.passwordChanged : false,
       tempPassword: user.tempPassword || null,
       token: generateToken(user._id),
     };
+
+    // Optionally fetch joiner data in the background (non-blocking)
+    // Only fetch if joinerId exists and user is a trainee (where joiner data is most needed)
+    if (userModel === 'UserNew' && user.joinerId && user.role === 'trainee') {
+      // Fetch joiner data asynchronously without blocking the response
+      // This will be available in subsequent profile requests
+      setImmediate(async () => {
+        try {
+          const Joiner = require('../models/Joiner');
+          await Joiner.findById(user.joinerId).lean(); // Cache for later use
+        } catch (err) {
+          // Silently fail - joiner data is not critical for login
+        }
+      });
+    }
 
     res.status(200).json(responseData);
   } catch (error) {

@@ -259,7 +259,7 @@ const getTrainerDashboard = async (req, res) => {
 
     // First, let's just try to find the trainer
     const trainer = await User.findById(trainerId)
-      .populate('assignedTrainees', 'name email employeeId department lastClockIn lastClockOut')
+      .populate('assignedTrainees', 'name email employeeId department lastClockIn lastClockOut author_id')
       .select('name email assignedTrainees');
 
     if (!trainer) {
@@ -267,7 +267,7 @@ const getTrainerDashboard = async (req, res) => {
     }
 
     // Debug: Check all trainees in database and their assigned trainers
-    const allTrainees = await User.find({ role: 'trainee', isActive: true }).select('name email assignedTrainer');
+    const allTrainees = await User.find({ role: 'trainee', isActive: true }).select('name email assignedTrainer author_id');
     allTrainees.forEach(trainee => {
       });
     
@@ -280,20 +280,21 @@ const getTrainerDashboard = async (req, res) => {
     
     // Check if assignedTrainees exists and is an array
     if (trainer.assignedTrainees && Array.isArray(trainer.assignedTrainees)) {
-      // Filter out deactivated trainees from assignedTrainees
+      // Filter out deactivated trainees from assignedTrainees and get full trainee data
       const activeAssignedTrainees = [];
       for (const traineeId of trainer.assignedTrainees) {
-        const trainee = await User.findById(traineeId).select('isActive');
+        const trainee = await User.findById(traineeId).select('isActive name email employeeId department lastClockIn lastClockOut author_id');
         if (trainee && trainee.isActive !== false) {
-          activeAssignedTrainees.push(traineeId);
+          activeAssignedTrainees.push(trainee);
         }
       }
       assignedTrainees = activeAssignedTrainees;
       
       // Update the trainer's assignedTrainees field to remove deactivated trainees
-      if (activeAssignedTrainees.length !== trainer.assignedTrainees.length) {
+      const activeTraineeIds = activeAssignedTrainees.map(t => t._id);
+      if (activeTraineeIds.length !== trainer.assignedTrainees.length) {
         await User.findByIdAndUpdate(trainerId, { 
-          $set: { assignedTrainees: activeAssignedTrainees } 
+          $set: { assignedTrainees: activeTraineeIds } 
         });
       }
     } else {
@@ -307,11 +308,16 @@ const getTrainerDashboard = async (req, res) => {
     // If no assigned trainees found in the trainer's assignedTrainees field, 
     // but we found trainees assigned to this trainer, update the trainer's assignedTrainees
     if (assignedTrainees.length === 0 && traineesAssignedToThisTrainer.length > 0) {
+      // Fetch full trainee data with author_id
       const traineeIds = traineesAssignedToThisTrainer.map(t => t._id);
+      const fullTraineeData = await User.find({ 
+        _id: { $in: traineeIds }
+      }).select('name email employeeId department lastClockIn lastClockOut author_id');
+      
       await User.findByIdAndUpdate(trainerId, { 
         $set: { assignedTrainees: traineeIds } 
       });
-      assignedTrainees = traineesAssignedToThisTrainer;
+      assignedTrainees = fullTraineeData;
       }
     
     // Set default date range (last 30 days) - but let's be more lenient for testing

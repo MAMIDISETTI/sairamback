@@ -170,9 +170,25 @@ const getUsers = async (req, res) => {
 // @access  Private
 const getUserById = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select("-password");
-    if (!user) return res.status(404).json({ message: "User not found" });
-    res.json(user);
+    // Try User model first
+    let user = await User.findById(req.params.id).select("-password");
+    
+    // If not found, try UserNew model
+    if (!user) {
+      user = await UserNew.findById(req.params.id).select("-password");
+    }
+    
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Ensure author_id is included (use _id as fallback if author_id doesn't exist)
+    const userObj = user.toObject ? user.toObject() : user;
+    if (!userObj.author_id && userObj._id) {
+      userObj.author_id = userObj._id.toString();
+    }
+    
+    res.json(userObj);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -327,4 +343,86 @@ const createUser = async (req, res) => {
   }
 };
 
-module.exports = { getUsers, getUserById, createUser };
+// @desc    Update user by author_id
+// @route   PUT /api/users/by-author/:authorId
+// @access  Private (Admin)
+const updateUserByAuthorId = async (req, res) => {
+  try {
+    const { authorId } = req.params;
+    const updateData = req.body;
+
+    if (!authorId) {
+      return res.status(400).json({ message: 'Author ID is required' });
+    }
+
+    // Find user in UserNew first, then User
+    let user = await UserNew.findOne({ author_id: authorId });
+    let userModel = 'UserNew';
+    
+    if (!user) {
+      user = await User.findOne({ author_id: authorId });
+      userModel = 'User';
+    }
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Prepare update data (only include allowed fields)
+    const allowedFields = [
+      'name', 'email', 'phone', 'department', 'state', 
+      'qualification', 'specialization', 'yearOfPassing', 'yearOfPassout',
+      'joiningDate', 'dateOfJoining', 'isActive'
+    ];
+    
+    const filteredUpdateData = {};
+    allowedFields.forEach(field => {
+      if (updateData[field] !== undefined) {
+        filteredUpdateData[field] = updateData[field];
+      }
+    });
+
+    // Handle date fields
+    if (filteredUpdateData.joiningDate) {
+      filteredUpdateData.joiningDate = new Date(filteredUpdateData.joiningDate);
+    }
+    if (filteredUpdateData.dateOfJoining) {
+      filteredUpdateData.dateOfJoining = new Date(filteredUpdateData.dateOfJoining);
+    }
+
+    // Update user
+    let updatedUser;
+    if (userModel === 'UserNew') {
+      updatedUser = await UserNew.findByIdAndUpdate(
+        user._id,
+        filteredUpdateData,
+        { new: true, runValidators: false }
+      ).select('-password');
+    } else {
+      updatedUser = await User.findByIdAndUpdate(
+        user._id,
+        filteredUpdateData,
+        { new: true, runValidators: false }
+      ).select('-password');
+    }
+
+    if (!updatedUser) {
+      return res.status(500).json({ message: 'Failed to update user' });
+    }
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      user: updatedUser
+    });
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error', 
+      error: error.message 
+    });
+  }
+};
+
+module.exports = { getUsers, getUserById, createUser, updateUserByAuthorId };

@@ -10,7 +10,7 @@ const getAssignedTrainees = async (req, res) => {
 
     // Find the trainer and populate assigned trainees
     const trainer = await User.findById(trainerId)
-      .populate('assignedTrainees', 'name email employeeId department')
+      .populate('assignedTrainees', 'name email employeeId department author_id')
       .select('name email assignedTrainees');
 
     if (!trainer) {
@@ -24,7 +24,7 @@ const getAssignedTrainees = async (req, res) => {
     if (assignedTrainees.length > 0) {
       const activeAssignedTrainees = [];
       for (const traineeId of assignedTrainees) {
-        const trainee = await User.findById(traineeId).select('isActive name email employeeId department');
+        const trainee = await User.findById(traineeId).select('isActive name email employeeId department author_id');
         if (trainee && trainee.isActive !== false) {
           activeAssignedTrainees.push(trainee);
         }
@@ -46,7 +46,7 @@ const getAssignedTrainees = async (req, res) => {
         role: 'trainee', 
         assignedTrainer: trainerId,
         isActive: true
-      }).select('name email employeeId department');
+      }).select('name email employeeId department author_id');
       
       if (traineesAssignedToThisTrainer.length > 0) {
         // Update the trainer's assignedTrainees field

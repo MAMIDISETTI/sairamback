@@ -254,11 +254,74 @@ const bulkUploadCandidateReports = async (req, res) => {
       }
     }
 
+    // Batch optimization: Collect all author_ids first
+    const authorIds = [];
+    for (let i = 0; i < reportsData.length; i++) {
+      if (reportsData[i].author_id) {
+        authorIds.push(reportsData[i].author_id.trim());
+      }
+    }
+
+    // Batch fetch all users from both collections
+    const usersFromUser = await User.find({ 
+      author_id: { $in: authorIds } 
+    }).select('author_id name email _id').lean();
+    
+    const usersFromUserNew = await UserNew.find({ 
+      author_id: { $in: authorIds } 
+    }).select('author_id name email _id').lean();
+
+    // Create user lookup map (combine both collections, UserNew takes precedence)
+    const userMap = new Map();
+    usersFromUser.forEach(u => {
+      if (u.author_id) {
+        userMap.set(u.author_id.trim(), u);
+      }
+    });
+    usersFromUserNew.forEach(u => {
+      if (u.author_id) {
+        userMap.set(u.author_id.trim(), u);
+      }
+    });
+
+    // Batch fetch all existing reports for all author_ids
+    const existingLearningReports = await LearningReport.find({
+      author_id: { $in: authorIds }
+    }).select('author_id').lean();
+    
+    const existingAttendanceReports = await AttendanceReport.find({
+      author_id: { $in: authorIds }
+    }).select('author_id').lean();
+    
+    const existingGroomingReports = await GroomingReport.find({
+      author_id: { $in: authorIds }
+    }).select('author_id').lean();
+    
+    const existingInteractionsReports = await InteractionsReport.find({
+      author_id: { $in: authorIds }
+    }).select('author_id').lean();
+
+    // Create lookup maps for existing reports
+    const existingLearningMap = new Set(existingLearningReports.map(r => r.author_id?.trim()).filter(Boolean));
+    const existingAttendanceMap = new Set(existingAttendanceReports.map(r => r.author_id?.trim()).filter(Boolean));
+    const existingGroomingMap = new Set(existingGroomingReports.map(r => r.author_id?.trim()).filter(Boolean));
+    const existingInteractionsMap = new Set(existingInteractionsReports.map(r => r.author_id?.trim()).filter(Boolean));
+
     // Process each candidate report
     const processedReports = [];
     const errors = [];
     let createdCount = 0;
     let updatedCount = 0;
+
+    // Prepare bulk operations
+    const learningReportsToCreate = [];
+    const learningReportsToUpdate = [];
+    const attendanceReportsToCreate = [];
+    const attendanceReportsToUpdate = [];
+    const groomingReportsToCreate = [];
+    const groomingReportsToUpdate = [];
+    const interactionsReportsToCreate = [];
+    const interactionsReportsToUpdate = [];
 
     for (let i = 0; i < reportsData.length; i++) {
       try {
@@ -269,14 +332,13 @@ const bulkUploadCandidateReports = async (req, res) => {
           continue;
         }
 
-        // Validate author_id exists in users collection
-        let user = await User.findOne({ author_id: reportData.author_id.trim() });
-        if (!user) {
-          user = await UserNew.findOne({ author_id: reportData.author_id.trim() });
-        }
+        const authorId = reportData.author_id.trim();
+        
+        // Validate author_id exists in users collection (using pre-fetched data)
+        const user = userMap.get(authorId);
 
         if (!user) {
-          errors.push(`Row ${i + 1}: User not found with author_id ${reportData.author_id}`);
+          errors.push(`Row ${i + 1}: User not found with author_id ${authorId}`);
           continue;
         }
 
@@ -344,25 +406,20 @@ const bulkUploadCandidateReports = async (req, res) => {
             }
           });
           
+          // Preserve CourseCompletion if it exists (it has a different structure, doesn't need transformation)
+          if (reportData.learningReport.CourseCompletion && typeof reportData.learningReport.CourseCompletion === 'object') {
+            transformedLearningReport.CourseCompletion = reportData.learningReport.CourseCompletion;
+          }
+          
           // Only save if there's data
           if (Object.keys(transformedLearningReport).length > 0) {
             learningReport = transformedLearningReport;
-            console.log(`[DEBUG] Transformed learning report for ${reportData.author_id}:`, {
-              metricsCount: Object.keys(transformedLearningReport).length,
-              sampleMetrics: Object.keys(transformedLearningReport).slice(0, 3),
-              sampleMetricData: Object.keys(transformedLearningReport).length > 0 ? {
-                metric: Object.keys(transformedLearningReport)[0],
-                topics: Object.keys(transformedLearningReport[Object.keys(transformedLearningReport)[0]])
-              } : null
-            });
-          } else {
-            console.log(`[DEBUG] No transformed data for ${reportData.author_id}, original structure:`, {
-              hasLearningReport: !!reportData.learningReport,
-              subSheets: Object.keys(reportData.learningReport || {}),
-              allTopics: Array.from(allTopics),
-              allMetrics: Array.from(allMetrics)
-            });
           }
+        } else if (reportData.learningReport.CourseCompletion && Object.keys(reportData.learningReport.CourseCompletion).length > 0) {
+          // If only CourseCompletion exists (no other learning sub-sheets), still include it
+          learningReport = {
+            CourseCompletion: reportData.learningReport.CourseCompletion
+          };
         }
 
         // Only include attendanceReport if AttendanceReport is in the filter
@@ -377,7 +434,7 @@ const bulkUploadCandidateReports = async (req, res) => {
           groomingReport = reportData.groomingReport;
         }
 
-        // Save Learning Report (combines all learning sub-sheets)
+        // Prepare Learning Report for bulk operation
         if (learningReport && Object.keys(learningReport).length > 0) {
           try {
             // Extract all topics from the transformed data to create a skills array
@@ -396,96 +453,92 @@ const bulkUploadCandidateReports = async (req, res) => {
               skills: Array.from(allTopicsFromData)
             };
             
-            let learningReportDoc = await LearningReport.findOne({ author_id: reportData.author_id.trim() });
-            if (learningReportDoc) {
-              learningReportDoc.reportData = reportDataWithSkills;
-              learningReportDoc.uploadedBy = req.user.id;
-              learningReportDoc.uploadedAt = new Date();
-              learningReportDoc.lastUpdatedAt = new Date();
-              await learningReportDoc.save();
-              updatedCount++;
+            const exists = existingLearningMap.has(authorId);
+            if (exists) {
+              learningReportsToUpdate.push({
+                author_id: authorId,
+                reportData: reportDataWithSkills,
+                user: user._id || null
+              });
             } else {
-              await LearningReport.create({
-                author_id: reportData.author_id.trim(),
+              learningReportsToCreate.push({
+                author_id: authorId,
                 user: user._id || null,
                 reportData: reportDataWithSkills,
                 uploadedBy: req.user.id
               });
-              createdCount++;
             }
           } catch (saveError) {
-            throw new Error(`Failed to save Learning Report for author_id ${reportData.author_id}: ${saveError.message}`);
+            errors.push(`Row ${i + 1}: Failed to prepare Learning Report: ${saveError.message}`);
           }
         }
 
-        // Save Attendance Report
+        // Prepare Attendance Report for bulk operation
         if (attendanceReport && Object.keys(attendanceReport).length > 0) {
           try {
-            let attendanceReportDoc = await AttendanceReport.findOne({ author_id: reportData.author_id.trim() });
-            if (attendanceReportDoc) {
-              attendanceReportDoc.reportData = attendanceReport;
-              attendanceReportDoc.uploadedBy = req.user.id;
-              attendanceReportDoc.uploadedAt = new Date();
-              attendanceReportDoc.lastUpdatedAt = new Date();
-              await attendanceReportDoc.save();
-              updatedCount++;
+            const exists = existingAttendanceMap.has(authorId);
+            if (exists) {
+              attendanceReportsToUpdate.push({
+                author_id: authorId,
+                reportData: attendanceReport,
+                user: user._id || null
+              });
             } else {
-              await AttendanceReport.create({
-                author_id: reportData.author_id.trim(),
+              attendanceReportsToCreate.push({
+                author_id: authorId,
                 user: user._id || null,
                 reportData: attendanceReport,
                 uploadedBy: req.user.id
               });
-              createdCount++;
             }
           } catch (saveError) {
-            throw new Error(`Failed to save Attendance Report for author_id ${reportData.author_id}: ${saveError.message}`);
+            errors.push(`Row ${i + 1}: Failed to prepare Attendance Report: ${saveError.message}`);
           }
         }
 
-        // Save Grooming Report
+        // Prepare Grooming Report for bulk operation
         if (groomingReport && Object.keys(groomingReport).length > 0) {
           try {
-            let groomingReportDoc = await GroomingReport.findOne({ author_id: reportData.author_id.trim() });
-            if (groomingReportDoc) {
-              groomingReportDoc.reportData = groomingReport;
-              groomingReportDoc.uploadedBy = req.user.id;
-              groomingReportDoc.uploadedAt = new Date();
-              groomingReportDoc.lastUpdatedAt = new Date();
-              await groomingReportDoc.save();
-              updatedCount++;
+            const exists = existingGroomingMap.has(authorId);
+            if (exists) {
+              groomingReportsToUpdate.push({
+                author_id: authorId,
+                reportData: groomingReport,
+                user: user._id || null
+              });
             } else {
-              await GroomingReport.create({
-                author_id: reportData.author_id.trim(),
+              groomingReportsToCreate.push({
+                author_id: authorId,
                 user: user._id || null,
                 reportData: groomingReport,
                 uploadedBy: req.user.id
               });
-              createdCount++;
             }
           } catch (saveError) {
-            throw new Error(`Failed to save Grooming Report for author_id ${reportData.author_id}: ${saveError.message}`);
+            errors.push(`Row ${i + 1}: Failed to prepare Grooming Report: ${saveError.message}`);
           }
         }
 
-        // Save Cultural Report (stored in InteractionsReport collection for backward compatibility)
+        // Prepare Cultural Report for bulk operation (stored in InteractionsReport collection)
         if (culturalReport && (Array.isArray(culturalReport) ? culturalReport.length > 0 : Object.keys(culturalReport).length > 0)) {
-          let interactionsReportDoc = await InteractionsReport.findOne({ author_id: reportData.author_id });
-          if (interactionsReportDoc) {
-            interactionsReportDoc.reportData = culturalReport;
-            interactionsReportDoc.uploadedBy = req.user.id;
-            interactionsReportDoc.uploadedAt = new Date();
-            interactionsReportDoc.lastUpdatedAt = new Date();
-            await interactionsReportDoc.save();
-            updatedCount++;
-          } else {
-            await InteractionsReport.create({
-              author_id: reportData.author_id,
-              user: user._id,
-              reportData: culturalReport,
-              uploadedBy: req.user.id
-            });
-            createdCount++;
+          try {
+            const exists = existingInteractionsMap.has(authorId);
+            if (exists) {
+              interactionsReportsToUpdate.push({
+                author_id: authorId,
+                reportData: culturalReport,
+                user: user._id || null
+              });
+            } else {
+              interactionsReportsToCreate.push({
+                author_id: authorId,
+                user: user._id || null,
+                reportData: culturalReport,
+                uploadedBy: req.user.id
+              });
+            }
+          } catch (saveError) {
+            errors.push(`Row ${i + 1}: Failed to prepare Interactions Report: ${saveError.message}`);
           }
         }
 
@@ -500,6 +553,107 @@ const bulkUploadCandidateReports = async (req, res) => {
         const errorDetails = error.stack ? error.stack.split('\n')[0] : '';
         errors.push(`Row ${i + 1}: ${errorMessage}${errorDetails ? ' - ' + errorDetails : ''}`);
       }
+    }
+
+    // Execute bulk operations
+    try {
+      // Bulk create Learning Reports
+      if (learningReportsToCreate.length > 0) {
+        await LearningReport.insertMany(learningReportsToCreate, { ordered: false });
+        createdCount += learningReportsToCreate.length;
+      }
+      
+      // Bulk update Learning Reports
+      if (learningReportsToUpdate.length > 0) {
+        const updatePromises = learningReportsToUpdate.map(report => 
+          LearningReport.updateOne(
+            { author_id: report.author_id },
+            {
+              $set: {
+                reportData: report.reportData,
+                uploadedBy: req.user.id,
+                lastUpdatedAt: new Date()
+              }
+            }
+          )
+        );
+        await Promise.all(updatePromises);
+        updatedCount += learningReportsToUpdate.length;
+      }
+
+      // Bulk create Attendance Reports
+      if (attendanceReportsToCreate.length > 0) {
+        await AttendanceReport.insertMany(attendanceReportsToCreate, { ordered: false });
+        createdCount += attendanceReportsToCreate.length;
+      }
+      
+      // Bulk update Attendance Reports
+      if (attendanceReportsToUpdate.length > 0) {
+        const updatePromises = attendanceReportsToUpdate.map(report => 
+          AttendanceReport.updateOne(
+            { author_id: report.author_id },
+            {
+              $set: {
+                reportData: report.reportData,
+                uploadedBy: req.user.id,
+                lastUpdatedAt: new Date()
+              }
+            }
+          )
+        );
+        await Promise.all(updatePromises);
+        updatedCount += attendanceReportsToUpdate.length;
+      }
+
+      // Bulk create Grooming Reports
+      if (groomingReportsToCreate.length > 0) {
+        await GroomingReport.insertMany(groomingReportsToCreate, { ordered: false });
+        createdCount += groomingReportsToCreate.length;
+      }
+      
+      // Bulk update Grooming Reports
+      if (groomingReportsToUpdate.length > 0) {
+        const updatePromises = groomingReportsToUpdate.map(report => 
+          GroomingReport.updateOne(
+            { author_id: report.author_id },
+            {
+              $set: {
+                reportData: report.reportData,
+                uploadedBy: req.user.id,
+                lastUpdatedAt: new Date()
+              }
+            }
+          )
+        );
+        await Promise.all(updatePromises);
+        updatedCount += groomingReportsToUpdate.length;
+      }
+
+      // Bulk create Interactions Reports
+      if (interactionsReportsToCreate.length > 0) {
+        await InteractionsReport.insertMany(interactionsReportsToCreate, { ordered: false });
+        createdCount += interactionsReportsToCreate.length;
+      }
+      
+      // Bulk update Interactions Reports
+      if (interactionsReportsToUpdate.length > 0) {
+        const updatePromises = interactionsReportsToUpdate.map(report => 
+          InteractionsReport.updateOne(
+            { author_id: report.author_id },
+            {
+              $set: {
+                reportData: report.reportData,
+                uploadedBy: req.user.id,
+                lastUpdatedAt: new Date()
+              }
+            }
+          )
+        );
+        await Promise.all(updatePromises);
+        updatedCount += interactionsReportsToUpdate.length;
+      }
+    } catch (bulkError) {
+      errors.push(`Bulk operation error: ${bulkError.message}`);
     }
 
     res.status(200).json({
@@ -523,10 +677,12 @@ const bulkUploadCandidateReports = async (req, res) => {
 
 // @desc    Get candidate performance data (all reports)
 // @route   GET /api/candidate-reports/performance/:authorId
-// @access  Private (Admin)
+// @access  Private (Admin, Trainer - trainers can only access assigned trainees)
 const getCandidatePerformance = async (req, res) => {
   try {
     const { authorId } = req.params;
+    const userId = req.user.id;
+    const userRole = req.user.role;
 
     if (!authorId) {
       return res.status(400).json({
@@ -536,9 +692,67 @@ const getCandidatePerformance = async (req, res) => {
     }
 
     // Fetch Personal Details from users collection
+    // Try to find by author_id first, then by _id if author_id is a valid ObjectId
     let user = await User.findOne({ author_id: authorId })
       .select('-password -tempPassword')
       .lean();
+    
+    // If not found by author_id, try by _id (in case authorId is actually an _id)
+    if (!user) {
+      try {
+        const mongoose = require('mongoose');
+        if (mongoose.Types.ObjectId.isValid(authorId)) {
+          user = await User.findById(authorId)
+            .select('-password -tempPassword')
+            .lean();
+        }
+      } catch (e) {
+        // Ignore error, continue with user as null
+      }
+    }
+    
+    // If user is a trainer, verify they can access this trainee's data
+    if (userRole === 'trainer') {
+      const trainer = await User.findById(userId);
+      if (!trainer) {
+        return res.status(404).json({
+          success: false,
+          message: 'Trainer not found'
+        });
+      }
+
+      // Check if the trainee is assigned to this trainer
+      // Try to find trainee by author_id first, then by _id
+      let trainee = await User.findOne({ author_id: authorId, role: 'trainee' });
+      if (!trainee) {
+        try {
+          const mongoose = require('mongoose');
+          if (mongoose.Types.ObjectId.isValid(authorId)) {
+            trainee = await User.findOne({ _id: authorId, role: 'trainee' });
+          }
+        } catch (e) {
+          // Ignore error
+        }
+      }
+      
+      if (!trainee) {
+        return res.status(404).json({
+          success: false,
+          message: 'Trainee not found'
+        });
+      }
+
+      const isAssigned = trainer.assignedTrainees?.some(
+        id => id.toString() === trainee._id.toString()
+      ) || trainee.assignedTrainer?.toString() === userId;
+
+      if (!isAssigned) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only access reports for trainees assigned to you'
+        });
+      }
+    }
     
     let userModel = 'User';
     
@@ -653,7 +867,6 @@ const getCandidatePerformance = async (req, res) => {
       
       if (isSubSheetFormat) {
         // Transform from sub-sheet format to metric-based format
-        console.log('[TRANSFORM] Converting sub-sheet format to metric-based format for', authorId);
         const transformed = {};
         const allTopics = new Set();
         const allMetrics = new Set();
@@ -695,13 +908,13 @@ const getCandidatePerformance = async (req, res) => {
         
         // Add skills array
         transformed.skills = Array.from(allTopics);
-        transformedLearningReportData = transformed;
         
-        // console.log('[TRANSFORM] Transformation complete:', {
-        //   metricsCount: Object.keys(transformed).length - 1, // -1 for skills
-        //   topicsCount: allTopics.size,
-        //   sampleMetrics: Object.keys(transformed).filter(k => k !== 'skills').slice(0, 3)
-        // });
+        // Preserve CourseCompletion if it exists (it has a different structure, doesn't need transformation)
+        if (reportData.CourseCompletion && typeof reportData.CourseCompletion === 'object') {
+          transformed.CourseCompletion = reportData.CourseCompletion;
+        }
+        
+        transformedLearningReportData = transformed;
       } else {
         // Already in metric-based format
         transformedLearningReportData = reportData;
@@ -744,9 +957,140 @@ const getCandidatePerformance = async (req, res) => {
   }
 };
 
+// @desc    Update candidate report (Learning, Attendance, Grooming, or Interactions)
+// @route   PUT /api/candidate-reports/:authorId/:reportType
+// @access  Private (Admin, Trainer - trainers can only update attendance/grooming for assigned trainees)
+const updateCandidateReport = async (req, res) => {
+  try {
+    const { authorId, reportType } = req.params;
+    const { reportData } = req.body;
+
+    if (!authorId || !reportType) {
+      return res.status(400).json({
+        success: false,
+        message: 'Author ID and report type are required'
+      });
+    }
+
+    if (!reportData || typeof reportData !== 'object') {
+      return res.status(400).json({
+        success: false,
+        message: 'Report data is required and must be an object'
+      });
+    }
+
+    // Validate report type
+    const validReportTypes = ['learning', 'attendance', 'grooming', 'interactions'];
+    if (!validReportTypes.includes(reportType.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid report type. Must be one of: ${validReportTypes.join(', ')}`
+      });
+    }
+
+    // Get the current user for uploadedBy
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // If user is a trainer, verify they can update this trainee's report
+    if (userRole === 'trainer') {
+      // Trainers can only update attendance and grooming reports
+      if (!['attendance', 'grooming'].includes(reportType.toLowerCase())) {
+        return res.status(403).json({
+          success: false,
+          message: 'Trainers can only update attendance and grooming reports'
+        });
+      }
+
+      // Check if the trainee is assigned to this trainer
+      const User = require('../models/User');
+      const trainee = await User.findOne({ author_id: authorId, role: 'trainee' });
+      
+      if (!trainee) {
+        return res.status(404).json({
+          success: false,
+          message: 'Trainee not found'
+        });
+      }
+
+      const trainer = await User.findById(userId);
+      if (!trainer) {
+        return res.status(404).json({
+          success: false,
+          message: 'Trainer not found'
+        });
+      }
+
+      // Check if trainee is assigned to this trainer
+      const isAssigned = trainer.assignedTrainees?.some(
+        id => id.toString() === trainee._id.toString()
+      ) || trainee.assignedTrainer?.toString() === userId;
+
+      if (!isAssigned) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only update reports for trainees assigned to you'
+        });
+      }
+    }
+
+    // Map report type to model
+    const reportTypeMap = {
+      'learning': require('../models/LearningReport'),
+      'attendance': require('../models/AttendanceReport'),
+      'grooming': require('../models/GroomingReport'),
+      'interactions': require('../models/InteractionsReport')
+    };
+
+    const ReportModel = reportTypeMap[reportType.toLowerCase()];
+
+    // Find existing report
+    let report = await ReportModel.findOne({ author_id: authorId })
+      .sort({ uploadedAt: -1 })
+      .limit(1);
+
+    if (report) {
+      // Update existing report
+      report.reportData = reportData;
+      report.lastUpdatedAt = new Date();
+      report.updatedBy = userId;
+      await report.save();
+    } else {
+      // Create new report
+      report = await ReportModel.create({
+        author_id: authorId,
+        reportData: reportData,
+        uploadedBy: userId,
+        uploadedAt: new Date(),
+        lastUpdatedAt: new Date(),
+        updatedBy: userId
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `${reportType} report updated successfully`,
+      data: {
+        reportData: report.reportData,
+        uploadedAt: report.uploadedAt,
+        lastUpdatedAt: report.lastUpdatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating candidate report:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   validateAuthorId,
   bulkUploadCandidateReports,
-  getCandidatePerformance
+  getCandidatePerformance,
+  updateCandidateReport
 };
 

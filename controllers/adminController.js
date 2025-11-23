@@ -268,9 +268,6 @@ const promoteUser = async (req, res) => {
 // Deactivate user account (remove access)
 const deactivateUser = async (req, res) => {
   try {
-    console.log('=== DEACTIVATE USER REQUEST ===');
-    console.log('Request body:', req.body);
-    console.log('Request user:', req.user);
     
     const { userId, reason } = req.body;
     const { id: adminId } = req.user;
@@ -292,17 +289,10 @@ const deactivateUser = async (req, res) => {
     }
     
     if (!userExists) {
-      console.log('User not found in either model, returning 404');
       return res.status(404).json({
         message: 'User not found'
       });
     }
-    
-    console.log(`Found in ${userModel}:`, {
-      id: userExists._id,
-      name: userExists.name,
-      role: userExists.role
-    });
 
     // Check if user is already deactivated
     if (!userExists.isActive) {
@@ -399,7 +389,6 @@ const deactivateUser = async (req, res) => {
           }
         );
         
-        console.log(`Unassigned ${assignedTrainees.length} trainees from deactivated trainer ${userExists.name}`);
       }
       
       // Clear the trainer's assignedTrainees array
@@ -410,9 +399,7 @@ const deactivateUser = async (req, res) => {
 
     // Create deactivated user record
     try {
-      console.log('=== CREATING DEACTIVATED USER RECORD ===');
-      
-      // Get admin user info
+       // Get admin user info
       const adminUser = await UserNew.findById(adminId).select('name email');
       const adminName = adminUser ? adminUser.name : 'Unknown Admin';
       const adminEmail = adminUser ? adminUser.email : 'unknown@admin.com';
@@ -499,13 +486,9 @@ const deactivateUser = async (req, res) => {
     // Update corresponding joiner record status
     const Joiner = require('../models/Joiner');
     try {
-      console.log('=== DEACTIVATION JOINER UPDATE DEBUG ===');
-      console.log(`Looking for joiner with email: ${updateResult.email} and name: ${updateResult.name}`);
-      
-      // Try to find joiner by email first
+       // Try to find joiner by email first
       let existingJoiner = await Joiner.findOne({ email: updateResult.email });
-      console.log('Joiner found by email:', existingJoiner ? 'YES' : 'NO');
-      
+        
       // If not found by email, try by name
       if (!existingJoiner) {
         existingJoiner = await Joiner.findOne({ 
@@ -514,27 +497,9 @@ const deactivateUser = async (req, res) => {
             { candidate_name: updateResult.name }
           ]
         });
-        console.log('Joiner found by name:', existingJoiner ? 'YES' : 'NO');
-        if (existingJoiner) {
-          console.log('Found joiner by name:', {
-            email: existingJoiner.email,
-            name: existingJoiner.name,
-            candidate_name: existingJoiner.candidate_name,
-            status: existingJoiner.status
-          });
-        }
       }
-      
-      console.log('Final joiner found:', existingJoiner ? {
-        email: existingJoiner.email,
-        name: existingJoiner.name,
-        candidate_name: existingJoiner.candidate_name,
-        status: existingJoiner.status,
-        accountCreated: existingJoiner.accountCreated
-      } : 'No joiner found');
-      
+
       if (existingJoiner) {
-        console.log('Attempting to update joiner status...');
         const joinerUpdateResult = await Joiner.findOneAndUpdate(
           { _id: existingJoiner._id },
           { 
@@ -544,22 +509,7 @@ const deactivateUser = async (req, res) => {
           { runValidators: false, new: true }
         );
         
-        if (joinerUpdateResult) {
-          console.log(` Successfully updated joiner status to inactive for: ${joinerUpdateResult.email || joinerUpdateResult.name}`);
-          console.log('Updated joiner:', {
-            email: joinerUpdateResult.email,
-            name: joinerUpdateResult.name,
-            candidate_name: joinerUpdateResult.candidate_name,
-            status: joinerUpdateResult.status,
-            accountCreated: joinerUpdateResult.accountCreated
-          });
-        } else {
-          console.log('Failed to update joiner status');
-        }
-      } else {
-        console.log(`No joiner record found for: ${updateResult.email} or ${updateResult.name}`);
-      }
-      console.log('=== END DEACTIVATION JOINER UPDATE DEBUG ===');
+      } 
     } catch (joinerError) {
       console.error('Error updating joiner status:', joinerError);
       // Don't fail the deactivation if joiner update fails
