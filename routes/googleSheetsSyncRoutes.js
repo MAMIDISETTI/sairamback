@@ -6,10 +6,14 @@ const {
   syncJoiners,
   syncCandidateReports,
   syncAll,
+  getSyncConfig,
 } = require('../controllers/googleSheetsSyncController');
 
 // All routes require authentication
 router.use(protect);
+
+// Get sync configuration status (Admin only)
+router.get('/config', requireRoles(['admin']), getSyncConfig);
 
 // Sync Users (Admin only)
 router.post('/users', requireRoles(['admin']), syncUsers);

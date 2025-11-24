@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const { autoSyncToGoogleSheets } = require('../utils/autoSyncGoogleSheets');
 
 // Create admin account with invite token
 const createAdmin = async (req, res) => {
@@ -917,6 +918,10 @@ const createTraineeAccount = async (req, res) => {
     });
 
     await newJoiner.save();
+
+    // Automatically sync joiners and users to Google Sheets (non-blocking)
+    autoSyncToGoogleSheets('joiners');
+    autoSyncToGoogleSheets('users');
 
     res.status(201).json({
       message: 'Joiner account created successfully',

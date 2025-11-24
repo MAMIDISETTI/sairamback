@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const UserNew = require("../models/UserNew");
 const Joiner = require("../models/Joiner");
 const crypto = require("crypto");
+const { autoSyncToGoogleSheets } = require("../utils/autoSyncGoogleSheets");
 
 // Generate JWT Token
 const generateToken = (id) => {
@@ -107,7 +108,13 @@ const registerUser = async (req, res) => {
       // Update user with joiner reference
       user.joinerId = joiner._id;
       await user.save();
+
+      // Automatically sync joiners to Google Sheets (non-blocking)
+      autoSyncToGoogleSheets('joiners');
     }
+
+    // Automatically sync users to Google Sheets (non-blocking)
+    autoSyncToGoogleSheets('users');
 
     // Return user data with JWT
     const responseData = {

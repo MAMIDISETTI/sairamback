@@ -1,6 +1,7 @@
 const Joiner = require('../models/Joiner');
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
+const { autoSyncToGoogleSheets } = require('../utils/autoSyncGoogleSheets');
 
 // Create a new joiner
 const createJoiner = async (req, res) => {
@@ -40,6 +41,9 @@ const createJoiner = async (req, res) => {
       notes,
       createdBy: req.user.id
     });
+
+    // Automatically sync to Google Sheets (non-blocking)
+    autoSyncToGoogleSheets('joiners');
 
     res.status(201).json({
       message: 'Joiner added successfully',
@@ -349,6 +353,10 @@ const createUserAccount = async (req, res) => {
     joiner.userId = user._id;
     joiner.status = 'active';
     await joiner.save();
+
+    // Automatically sync joiners and users to Google Sheets (non-blocking)
+    autoSyncToGoogleSheets('joiners');
+    autoSyncToGoogleSheets('users');
 
     res.json({
       message: 'User account created successfully',

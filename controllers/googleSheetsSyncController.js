@@ -14,12 +14,14 @@ const InteractionsReport = require('../models/InteractionsReport');
  */
 const syncUsers = async (req, res) => {
   try {
-    const { spreadsheet_id, sheet_name = 'Users' } = req.body;
+    // Use spreadsheet_id from request body, or fall back to environment variable
+    const spreadsheet_id = req.body.spreadsheet_id || process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+    const sheet_name = req.body.sheet_name || 'Users';
 
     if (!spreadsheet_id) {
       return res.status(400).json({
         success: false,
-        message: 'Spreadsheet ID is required',
+        message: 'Spreadsheet ID is required. Please set GOOGLE_SHEETS_SPREADSHEET_ID in your .env file or provide it in the request.',
       });
     }
 
@@ -147,12 +149,14 @@ const syncUsers = async (req, res) => {
  */
 const syncJoiners = async (req, res) => {
   try {
-    const { spreadsheet_id, sheet_name = 'Joiners' } = req.body;
+    // Use spreadsheet_id from request body, or fall back to environment variable
+    const spreadsheet_id = req.body.spreadsheet_id || process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+    const sheet_name = req.body.sheet_name || 'Joiners';
 
     if (!spreadsheet_id) {
       return res.status(400).json({
         success: false,
-        message: 'Spreadsheet ID is required',
+        message: 'Spreadsheet ID is required. Please set GOOGLE_SHEETS_SPREADSHEET_ID in your .env file or provide it in the request.',
       });
     }
 
@@ -225,12 +229,14 @@ const syncJoiners = async (req, res) => {
  */
 const syncCandidateReports = async (req, res) => {
   try {
-    const { spreadsheet_id, report_type = 'all' } = req.body; // 'all', 'learning', 'attendance', 'grooming', 'interactions'
+    // Use spreadsheet_id from request body, or fall back to environment variable
+    const spreadsheet_id = req.body.spreadsheet_id || process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+    const report_type = req.body.report_type || 'all'; // 'all', 'learning', 'attendance', 'grooming', 'interactions'
 
     if (!spreadsheet_id) {
       return res.status(400).json({
         success: false,
-        message: 'Spreadsheet ID is required',
+        message: 'Spreadsheet ID is required. Please set GOOGLE_SHEETS_SPREADSHEET_ID in your .env file or provide it in the request.',
       });
     }
 
@@ -357,12 +363,13 @@ const syncCandidateReports = async (req, res) => {
  */
 const syncAll = async (req, res) => {
   try {
-    const { spreadsheet_id } = req.body;
+    // Use spreadsheet_id from request body, or fall back to environment variable
+    const spreadsheet_id = req.body.spreadsheet_id || process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
 
     if (!spreadsheet_id) {
       return res.status(400).json({
         success: false,
-        message: 'Spreadsheet ID is required',
+        message: 'Spreadsheet ID is required. Please set GOOGLE_SHEETS_SPREADSHEET_ID in your .env file or provide it in the request.',
       });
     }
 
@@ -412,10 +419,37 @@ const syncAll = async (req, res) => {
   }
 };
 
+/**
+ * @route   GET /api/sync/config
+ * @desc    Get Google Sheets sync configuration status
+ * @access  Private (Admin)
+ */
+const getSyncConfig = async (req, res) => {
+  try {
+    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+    
+    res.json({
+      success: true,
+      configured: !!spreadsheetId,
+      spreadsheetId: spreadsheetId || null,
+      message: spreadsheetId 
+        ? 'Google Sheets sync is configured' 
+        : 'Google Sheets sync is not configured. Please set GOOGLE_SHEETS_SPREADSHEET_ID in your .env file.',
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error getting sync configuration',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   syncUsers,
   syncJoiners,
   syncCandidateReports,
   syncAll,
+  getSyncConfig,
 };
 
