@@ -470,11 +470,17 @@ const updateUserProfile = async (req, res) => {
           if (req.body.haveMTechOD !== undefined) joiner.haveMTechOD = req.body.haveMTechOD;
           if (req.body.yearOfPassout !== undefined) joiner.yearOfPassout = req.body.yearOfPassout;
           await joiner.save();
+          
+          // Automatically sync to Google Sheets (non-blocking)
+          autoSyncToGoogleSheets('joiners');
         }
       } catch (joinerError) {
         // Don't fail the request if joiner update fails
       }
     }
+
+    // Automatically sync users to Google Sheets (non-blocking)
+    autoSyncToGoogleSheets('users');
 
     // Get full user data for response
     let fullUserData = null;

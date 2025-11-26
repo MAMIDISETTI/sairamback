@@ -1,4 +1,5 @@
 const Attendance = require("../models/Attendance");
+const AttendanceReport = require("../models/AttendanceReport");
 const User = require("../models/User");
 const Notification = require("../models/Notification");
 
@@ -284,11 +285,226 @@ const validateAttendance = async (req, res) => {
   }
 };
 
+// @desc    Mark attendance for trainee (by trainer)
+// @route   POST /api/attendance/mark
+// @access  Private (Trainer)
+const markTraineeAttendance = async (req, res) => {
+  try {
+    const trainerId = req.user.id;
+    const { traineeId, date, status } = req.body;
+
+    if (!traineeId || !date || !status) {
+      return res.status(400).json({ message: "Trainee ID, date, and status are required" });
+    }
+
+    // Verify trainer has access to this trainee
+    const trainer = await User.findById(trainerId);
+    if (!trainer) {
+      return res.status(404).json({ message: "Trainer not found" });
+    }
+
+    const trainee = await User.findById(traineeId);
+    if (!trainee) {
+      return res.status(404).json({ message: "Trainee not found" });
+    }
+
+    const hasAccess = trainer.assignedTrainees.some(
+      id => id.toString() === traineeId
+    );
+
+    if (!hasAccess) {
+      return res.status(403).json({ message: "Access denied. Trainee not assigned to you." });
+    }
+
+    const targetDate = new Date(date);
+    targetDate.setHours(0, 0, 0, 0);
+
+    let attendance = await Attendance.findOne({
+      user: traineeId,
+      date: targetDate
+    });
+
+    if (status === 'present') {
+      const clockInTime = new Date();
+      if (attendance) {
+        attendance.clockIn = {
+          time: clockInTime,
+          location: req.body.location || null,
+          ipAddress: req.ip || req.connection.remoteAddress
+        };
+        attendance.status = 'present';
+        await attendance.save();
+      } else {
+        attendance = await Attendance.create({
+          user: traineeId,
+          date: targetDate,
+          clockIn: {
+            time: clockInTime,
+            location: req.body.location || null,
+            ipAddress: req.ip || req.connection.remoteAddress
+          },
+          status: 'present'
+        });
+      }
+    } else if (status === 'absent') {
+      if (attendance) {
+        attendance.status = 'absent';
+        attendance.notes = req.body.notes || 'Marked as absent by trainer';
+        await attendance.save();
+      } else {
+        attendance = await Attendance.create({
+          user: traineeId,
+          date: targetDate,
+          status: 'absent',
+          notes: req.body.notes || 'Marked as absent by trainer'
+        });
+      }
+    }
+
+    // Also update AttendanceReport for admin dashboard
+    try {
+      const authorId = trainee.author_id || trainee._id.toString();
+      let attendanceReport = await AttendanceReport.findOne({
+        author_id: authorId
+      });
+
+      const year = targetDate.getFullYear();
+      const month = targetDate.getMonth();
+      const monthNum = (month + 1).toString(); // Month number (1-12)
+      
+      // Format month key as "NOV'25" format
+      const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JULY', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      const monthAbbr = monthNames[month];
+      const yearShort = year.toString().slice(-2);
+      const monthKey = `${monthAbbr}'${yearShort}`;
+
+      // Get or initialize reportData
+      const reportData = attendanceReport?.reportData || {};
+      
+      // Initialize fields if they don't exist
+      if (!reportData['Total Working Days']) {
+        reportData['Total Working Days'] = {};
+      }
+      if (!reportData['No of days attended']) {
+        reportData['No of days attended'] = {};
+      }
+      if (!reportData['No of leaves taken']) {
+        reportData['No of leaves taken'] = {};
+      }
+      if (!reportData['Monthly Percentage']) {
+        reportData['Monthly Percentage'] = {};
+      }
+
+      // Migrate any existing "November Month" format to "NOV'25" format to avoid duplicates
+      const monthNameToFormatted = {
+        "January Month": "JAN'25", "February Month": "FEB'25", "March Month": "MAR'25", "April Month": "APR'25",
+        "May Month": "MAY'25", "June Month": "JUN'25", "July Month": "JULY'25", "August Month": "AUG'25",
+        "September Month": "SEP'25", "October Month": "OCT'25", "November Month": "NOV'25", "December Month": "DEC'25"
+      };
+      
+      const fieldsToMigrate = ['Total Working Days', 'No of days attended', 'No of leaves taken', 'Monthly Percentage'];
+      fieldsToMigrate.forEach(field => {
+        if (reportData[field] && typeof reportData[field] === 'object') {
+          Object.keys(reportData[field]).forEach(key => {
+            if (monthNameToFormatted[key]) {
+              // Migrate "November Month" to "NOV'25" format
+              const formattedKey = monthNameToFormatted[key];
+              if (!reportData[field][formattedKey]) {
+                reportData[field][formattedKey] = reportData[field][key];
+              }
+              // Remove old "November Month" key to avoid duplicates
+              delete reportData[field][key];
+            }
+          });
+        }
+      });
+
+      // Calculate working days for the month (excluding weekends)
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      let workingDays = 0;
+      for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(year, month, day);
+        const dayOfWeek = date.getDay();
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Exclude Sunday (0) and Saturday (6)
+          workingDays++;
+        }
+      }
+
+      // Count attended days for this month from Attendance model
+      const monthStart = new Date(year, month, 1);
+      monthStart.setHours(0, 0, 0, 0);
+      const monthEnd = new Date(year, month + 1, 0);
+      monthEnd.setHours(23, 59, 59, 999);
+      
+      const monthAttendance = await Attendance.find({
+        user: traineeId,
+        date: { $gte: monthStart, $lte: monthEnd },
+        status: 'present'
+      });
+      
+      const attendedCount = monthAttendance.length;
+      const leavesCount = Math.max(0, workingDays - attendedCount);
+      const attendancePercentage = workingDays > 0 ? Math.round((attendedCount / workingDays) * 100) : 0;
+      
+      // Remove old numeric key if it exists to avoid duplicates
+      if (reportData['Total Working Days'][monthNum]) {
+        delete reportData['Total Working Days'][monthNum];
+      }
+      if (reportData['No of days attended'][monthNum]) {
+        delete reportData['No of days attended'][monthNum];
+      }
+      if (reportData['No of leaves taken'][monthNum]) {
+        delete reportData['No of leaves taken'][monthNum];
+      }
+      if (reportData['Monthly Percentage'][monthNum]) {
+        delete reportData['Monthly Percentage'][monthNum];
+      }
+      
+      // Use only formatted key (NOV'25 format) to avoid duplicates
+      reportData['Total Working Days'][monthKey] = workingDays;
+      reportData['No of days attended'][monthKey] = attendedCount;
+      reportData['No of leaves taken'][monthKey] = leavesCount;
+      reportData['Monthly Percentage'][monthKey] = attendancePercentage;
+
+      if (!attendanceReport) {
+        // Create new attendance report
+        attendanceReport = await AttendanceReport.create({
+          author_id: authorId,
+          user: traineeId,
+          reportData: reportData,
+          uploadedBy: trainerId,
+          uploadedAt: new Date(),
+          lastUpdatedAt: new Date()
+        });
+      } else {
+        // Update existing attendance report
+        attendanceReport.reportData = reportData;
+        attendanceReport.markModified('reportData');
+        attendanceReport.lastUpdatedAt = new Date();
+        await attendanceReport.save();
+      }
+    } catch (error) {
+      console.error('Error updating AttendanceReport:', error);
+      // Don't fail the request if AttendanceReport update fails
+    }
+
+    res.json({
+      success: true,
+      message: `Attendance marked as ${status}`,
+      attendance
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
 module.exports = {
   clockIn,
   clockOut,
   getTodayAttendance,
   getAttendanceHistory,
   getTraineeAttendance,
-  validateAttendance
+  validateAttendance,
+  markTraineeAttendance
 };

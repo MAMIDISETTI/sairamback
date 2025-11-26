@@ -105,7 +105,9 @@ const getJoiners = async (req, res) => {
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
+        { candidate_name: { $regex: search, $options: 'i' } },
         { email: { $regex: search, $options: 'i' } },
+        { candidate_personal_mail_id: { $regex: search, $options: 'i' } },
         { employeeId: { $regex: search, $options: 'i' } }
       ];
     }
@@ -249,6 +251,12 @@ const updateJoiner = async (req, res) => {
       { new: true, runValidators: true }
     ).populate('createdBy', 'name email')
      .populate('userId', 'name email role');
+
+    // Automatically sync to Google Sheets (non-blocking)
+    autoSyncToGoogleSheets('joiners');
+    if (updatedJoiner.accountCreated) {
+      autoSyncToGoogleSheets('users');
+    }
 
     res.json({
       message: 'Joiner updated successfully',

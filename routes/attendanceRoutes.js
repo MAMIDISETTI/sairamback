@@ -7,7 +7,8 @@ const {
   getTodayAttendance,
   getAttendanceHistory,
   getTraineeAttendance,
-  validateAttendance
+  validateAttendance,
+  markTraineeAttendance
 } = require("../controllers/attendanceController");
 
 // Clock in/out routes (Trainers and Trainees)
@@ -19,5 +20,6 @@ router.get("/history", protect, requireRoles(["trainer", "trainee"]), getAttenda
 // Trainer-specific routes
 router.get("/trainees", protect, trainerOnly, getTraineeAttendance);
 router.put("/validate/:id", protect, trainerOnly, validateAttendance);
+router.post("/mark", protect, trainerOnly, markTraineeAttendance);
 
 module.exports = router;

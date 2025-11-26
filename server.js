@@ -10,6 +10,7 @@ const userRoutes = require("./routes/userRoutes")
 const taskRoutes = require("./routes/taskRoutes")
 const reportRoutes = require("./routes/reportRoutes")
 const attendanceRoutes = require("./routes/attendanceRoutes")
+const groomingRoutes = require("./routes/groomingRoutes")
 const dayPlanRoutes = require("./routes/dayPlanRoutes")
 const assignmentRoutes = require("./routes/assignmentRoutes")
 const observationRoutes = require("./routes/observationRoutes")
@@ -88,6 +89,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/tasks", taskRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/grooming", groomingRoutes);
 app.use("/api/dayplans", dayPlanRoutes);
 app.use("/api/assignments", assignmentRoutes);
 app.use("/api/observations", observationRoutes);

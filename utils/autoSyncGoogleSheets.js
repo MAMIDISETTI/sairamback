@@ -18,9 +18,16 @@ const autoSyncToGoogleSheets = async (syncType = 'joiners', spreadsheetId = null
   }
 
   // Run sync asynchronously without blocking
-  setImmediate(async () => {
+  // Use a fire-and-forget pattern that properly handles async
+  (async () => {
     try {
-      console.log(`[Auto-Sync] Starting ${syncType} sync to Google Sheets...`);
+      console.log(`[Auto-Sync] Starting ${syncType} sync to Google Sheets (Spreadsheet ID: ${targetSpreadsheetId})...`);
+      
+      // Ensure service is initialized before syncing
+      if (!googleSheetsSync.initialized || !googleSheetsSync.sheets) {
+        console.log('[Auto-Sync] Initializing Google Sheets service...');
+        await googleSheetsSync.initialize();
+      }
       
       if (syncType === 'joiners') {
         await syncJoinersToSheet(targetSpreadsheetId);
@@ -28,12 +35,20 @@ const autoSyncToGoogleSheets = async (syncType = 'joiners', spreadsheetId = null
         await syncUsersToSheet(targetSpreadsheetId);
       }
       
-      console.log(`[Auto-Sync] ${syncType} sync completed successfully`);
+      console.log(`[Auto-Sync] ✅ ${syncType} sync completed successfully`);
     } catch (error) {
       // Log error but don't throw - auto-sync failures shouldn't break the main operation
-      console.error(`[Auto-Sync] ${syncType} sync error:`, error.message);
-      console.error(`[Auto-Sync] Error stack:`, error.stack);
+      console.error(`[Auto-Sync] ❌ ${syncType} sync error:`, error.message);
+      console.error(`[Auto-Sync] Error details:`, {
+        name: error.name,
+        code: error.code,
+        message: error.message,
+        stack: error.stack?.split('\n').slice(0, 10).join('\n')
+      });
     }
+  })().catch(err => {
+    // Catch any unhandled promise rejections
+    console.error(`[Auto-Sync] Unhandled error in ${syncType} sync:`, err.message);
   });
 };
 
@@ -43,7 +58,8 @@ const autoSyncToGoogleSheets = async (syncType = 'joiners', spreadsheetId = null
 const syncJoinersToSheet = async (spreadsheetId) => {
   const sheetName = 'Joiners';
   
-  const joiners = await Joiner.find({}).lean();
+  // Fetch all joiners (use lean() for performance and ensure fresh data)
+  const joiners = await Joiner.find({}).lean().exec();
 
   const headers = [
     'Name',
@@ -100,12 +116,13 @@ const syncJoinersToSheet = async (spreadsheetId) => {
 const syncUsersToSheet = async (spreadsheetId) => {
   const sheetName = 'Users';
   
-  // Fetch all users from both collections
-  const users = await User.find({}).lean();
-  const usersNew = await UserNew.find({}).lean();
+  // Fetch all users from both collections (use lean() for performance and ensure fresh data)
+  // No caching - always fetch fresh from database
+  const users = await User.find({}).lean().exec();
+  const usersNew = await UserNew.find({}).lean().exec();
 
   // Fetch all joiners to get proper employee IDs (NW format)
-  const joiners = await Joiner.find({}).lean();
+  const joiners = await Joiner.find({}).lean().exec();
   
   // Create a map of joiners by author_id and email for quick lookup
   const joinerMap = new Map();

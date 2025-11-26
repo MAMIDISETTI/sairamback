@@ -390,6 +390,16 @@ const updateUserByAuthorId = async (req, res) => {
       filteredUpdateData.dateOfJoining = new Date(filteredUpdateData.dateOfJoining);
     }
 
+    // Check if user has joinerId before update (for updating joiner and syncing)
+    const Joiner = require('../models/Joiner');
+    let joiner = null;
+    if (user.joinerId) {
+      joiner = await Joiner.findById(user.joinerId);
+    } else if (user.author_id) {
+      // Try to find joiner by author_id as fallback
+      joiner = await Joiner.findOne({ author_id: user.author_id });
+    }
+
     // Update user
     let updatedUser;
     if (userModel === 'UserNew') {
@@ -409,6 +419,97 @@ const updateUserByAuthorId = async (req, res) => {
     if (!updatedUser) {
       return res.status(500).json({ message: 'Failed to update user' });
     }
+
+    console.log(`[User Update] Updated user ${updatedUser.email || updatedUser.author_id}:`, {
+      name: updatedUser.name,
+      email: updatedUser.email,
+      updatedFields: Object.keys(filteredUpdateData)
+    });
+
+    // If user has a linked joiner, also update the joiner record
+    if (joiner) {
+      const joinerUpdateData = {};
+      if (filteredUpdateData.name !== undefined) {
+        joinerUpdateData.name = filteredUpdateData.name;
+        joinerUpdateData.candidate_name = filteredUpdateData.name;
+      }
+      if (filteredUpdateData.email !== undefined) {
+        joinerUpdateData.email = filteredUpdateData.email;
+        joinerUpdateData.candidate_personal_mail_id = filteredUpdateData.email;
+      }
+      if (filteredUpdateData.phone !== undefined) {
+        joinerUpdateData.phone = filteredUpdateData.phone;
+        joinerUpdateData.phone_number = filteredUpdateData.phone;
+      }
+      if (filteredUpdateData.department !== undefined) {
+        joinerUpdateData.department = filteredUpdateData.department;
+      }
+      if (filteredUpdateData.qualification !== undefined) {
+        joinerUpdateData.qualification = filteredUpdateData.qualification;
+      }
+      if (filteredUpdateData.joiningDate !== undefined) {
+        joinerUpdateData.joiningDate = filteredUpdateData.joiningDate;
+        joinerUpdateData.date_of_joining = filteredUpdateData.joiningDate;
+      }
+
+      if (Object.keys(joinerUpdateData).length > 0) {
+        const updatedJoiner = await Joiner.findByIdAndUpdate(joiner._id, joinerUpdateData, { new: true, runValidators: true });
+        console.log(`[User Update] Also updated linked joiner ${updatedJoiner._id}:`, {
+          oldName: joiner.name || joiner.candidate_name,
+          newName: updatedJoiner.name || updatedJoiner.candidate_name,
+          updatedFields: Object.keys(joinerUpdateData)
+        });
+      }
+    } else {
+      // If no joiner found by joinerId, try to find by author_id
+      if (user.author_id) {
+        const joinerByAuthorId = await Joiner.findOne({ author_id: user.author_id });
+        if (joinerByAuthorId) {
+          const joinerUpdateData = {};
+          if (filteredUpdateData.name !== undefined) {
+            joinerUpdateData.name = filteredUpdateData.name;
+            joinerUpdateData.candidate_name = filteredUpdateData.name;
+          }
+          if (filteredUpdateData.email !== undefined) {
+            joinerUpdateData.email = filteredUpdateData.email;
+            joinerUpdateData.candidate_personal_mail_id = filteredUpdateData.email;
+          }
+          if (filteredUpdateData.phone !== undefined) {
+            joinerUpdateData.phone = filteredUpdateData.phone;
+            joinerUpdateData.phone_number = filteredUpdateData.phone;
+          }
+          if (filteredUpdateData.department !== undefined) {
+            joinerUpdateData.department = filteredUpdateData.department;
+          }
+          if (filteredUpdateData.qualification !== undefined) {
+            joinerUpdateData.qualification = filteredUpdateData.qualification;
+          }
+          if (filteredUpdateData.joiningDate !== undefined) {
+            joinerUpdateData.joiningDate = filteredUpdateData.joiningDate;
+            joinerUpdateData.date_of_joining = filteredUpdateData.joiningDate;
+          }
+
+          if (Object.keys(joinerUpdateData).length > 0) {
+            const updatedJoiner = await Joiner.findByIdAndUpdate(joinerByAuthorId._id, joinerUpdateData, { new: true, runValidators: true });
+            console.log(`[User Update] Found and updated joiner by author_id ${user.author_id}:`, {
+              oldName: joinerByAuthorId.name || joinerByAuthorId.candidate_name,
+              newName: updatedJoiner.name || updatedJoiner.candidate_name,
+              updatedFields: Object.keys(joinerUpdateData)
+            });
+          }
+        }
+      }
+    }
+
+    // Automatically sync to Google Sheets (non-blocking)
+    // Use setImmediate to ensure it runs after the response is sent
+    const { autoSyncToGoogleSheets } = require('../utils/autoSyncGoogleSheets');
+    setImmediate(() => {
+      autoSyncToGoogleSheets('users');
+      if (joiner) {
+        autoSyncToGoogleSheets('joiners');
+      }
+    });
 
     res.json({
       success: true,

@@ -25,12 +25,12 @@ const syncUsers = async (req, res) => {
       });
     }
 
-    // Fetch all users from both collections
-    const users = await User.find({}).lean();
-    const usersNew = await UserNew.find({}).lean();
+    // Fetch all users from both collections (ensure fresh data)
+    const users = await User.find({}).lean().exec();
+    const usersNew = await UserNew.find({}).lean().exec();
 
     // Fetch all joiners to get proper employee IDs (NW format)
-    const joiners = await Joiner.find({}).lean();
+    const joiners = await Joiner.find({}).lean().exec();
     
     // Create a map of joiners by author_id and email for quick lookup
     const joinerMap = new Map();
@@ -160,7 +160,8 @@ const syncJoiners = async (req, res) => {
       });
     }
 
-    const joiners = await Joiner.find({}).lean();
+    // Fetch all joiners (ensure fresh data)
+    const joiners = await Joiner.find({}).lean().exec();
 
     const headers = [
       'Name',
