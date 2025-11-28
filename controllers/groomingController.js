@@ -219,13 +219,6 @@ const getTraineeGrooming = async (req, res) => {
       dateKey = today.toISOString().split('T')[0];
     }
 
-    console.log('Fetching grooming data:', {
-      date,
-      dateKey,
-      traineeIds: traineeIds.map(id => id.toString()),
-      authorIds,
-      foundReports: groomingReports.length
-    });
 
     const groomingData = {};
     groomingReports.forEach(report => {
@@ -250,24 +243,10 @@ const getTraineeGrooming = async (req, res) => {
         }
       }
       
-      console.log('Processing report:', {
-        reportId: report._id,
-        userId,
-        author_id: report.author_id,
-        hasReportData: !!report.reportData,
-        reportDataKeys: report.reportData ? Object.keys(report.reportData) : [],
-        dateKey,
-        hasDateData: report.reportData && report.reportData[dateKey] ? true : false
-      });
-      
       if (userId && report.reportData && report.reportData[dateKey]) {
         groomingData[userId] = report.reportData[dateKey];
-        console.log('Added grooming data for user:', userId, groomingData[userId]);
       }
     });
-    
-    console.log('Final grooming data:', groomingData);
-
     res.json(groomingData);
 
   } catch (error) {
