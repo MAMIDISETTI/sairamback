@@ -418,29 +418,59 @@ const extractCourseCompletion = (learningReport) => {
 
 /**
  * Determine learning phase based on course completion
+ * 
+ * For each completed course:
+ * - If weeksTaken < weeksExpected → Fast Learner (score = 3)
+ * - If weeksTaken == weeksExpected → Average Learner (score = 2)
+ * - If weeksTaken > weeksExpected → Slow Learner (score = 1)
+ * 
+ * Calculate average of all course scores, then map to category:
+ * - 2.5 - 3.0 → Fast Learner
+ * - 1.5 - 2.49 → Average Learner
+ * - 1.0 - 1.49 → Slow Learner
  */
 const determineLearningPhase = (courseCompletion) => {
   if (!courseCompletion || Object.keys(courseCompletion).length === 0) {
     return 'unknown';
   }
 
-  const efficiencies = Object.values(courseCompletion)
-    .map(c => c.efficiency)
-    .filter(e => e > 0);
+  const courseScores = [];
 
-  if (efficiencies.length === 0) {
+  // Process each completed course
+  Object.values(courseCompletion).forEach(course => {
+    const weeksExpected = parseFloat(course.weeksExpected) || 0;
+    const weeksTaken = parseFloat(course.weeksTaken) || 0;
+
+    // Only process courses with valid data
+    if (weeksExpected > 0 && weeksTaken > 0) {
+      let score = 0;
+
+      if (weeksTaken < weeksExpected) {
+        // Completed faster than expected → Fast Learner
+        score = 3;
+      } else if (weeksTaken === weeksExpected || Math.abs(weeksTaken - weeksExpected) < 0.1) {
+        // Completed in expected time (with small tolerance for floating point) → Average Learner
+        score = 2;
+      } else {
+        // Took longer than expected → Slow Learner
+        score = 1;
+      }
+
+      courseScores.push(score);
+    }
+  });
+
+  if (courseScores.length === 0) {
     return 'unknown';
   }
 
-  const avgEfficiency = efficiencies.reduce((a, b) => a + b, 0) / efficiencies.length;
+  // Calculate average score
+  const avgScore = courseScores.reduce((a, b) => a + b, 0) / courseScores.length;
 
-  // Fast learner: efficiency > 1.2 (completes 20% faster than expected)
-  // Average learner: efficiency between 0.8 and 1.2
-  // Slow learner: efficiency < 0.8 (takes longer than expected)
-  
-  if (avgEfficiency >= 1.2) {
+  // Map average score to category
+  if (avgScore >= 2.5) {
     return 'fast';
-  } else if (avgEfficiency >= 0.8) {
+  } else if (avgScore >= 1.5) {
     return 'average';
   } else {
     return 'slow';

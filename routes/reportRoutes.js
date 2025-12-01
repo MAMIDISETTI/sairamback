@@ -1,11 +1,14 @@
 const express = require("express");
-const { protect, masterTrainerOnly, trainerOnly, requireRoles } = require("../middlewares/authMiddleware");
+const { protect, masterTrainerOnly, trainerOnly, requireRoles, adminOnly } = require("../middlewares/authMiddleware");
 const {
   generateAttendanceReport,
   generateDayPlanComplianceReport,
   generateObservationReport,
   generateAssignmentReport,
-  generateAuditLog
+  generateAuditLog,
+  getDemosReport,
+  getAttendanceGroomingReport,
+  getFortnightReport
 } = require("../controllers/reportController");
 
 const router = express.Router();
@@ -24,5 +27,10 @@ router.get("/assignments", protect, masterTrainerOnly, generateAssignmentReport)
 
 // Audit log (Master Trainer only)
 router.get("/audit", protect, masterTrainerOnly, generateAuditLog);
+
+// Admin Reports (Admin only)
+router.get("/demos", protect, adminOnly, getDemosReport);
+router.get("/attendance-grooming", protect, adminOnly, getAttendanceGroomingReport);
+router.get("/fortnight", protect, adminOnly, getFortnightReport);
 
 module.exports = router;

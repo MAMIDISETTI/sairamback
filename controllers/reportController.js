@@ -4,6 +4,10 @@ const DayPlan = require("../models/DayPlan");
 const Assignment = require("../models/Assignment");
 const Observation = require("../models/Observation");
 const Notification = require("../models/Notification");
+const LearningReport = require("../models/LearningReport");
+const AttendanceReport = require("../models/AttendanceReport");
+const GroomingReport = require("../models/GroomingReport");
+const Result = require("../models/Result");
 
 // @desc    Generate attendance report
 // @route   GET /api/reports/attendance
@@ -499,10 +503,363 @@ const convertAuditLogToCSV = (auditLog) => {
   return [headers, ...rows].map(row => row.join(',')).join('\n');
 };
 
+// @desc    Get demos report (Online and Offline)
+// @route   GET /api/reports/demos
+// @access  Private (Admin)
+const getDemosReport = async (req, res) => {
+  try {
+    const { period = 'weekly', type = 'all' } = req.query;
+    
+    // Calculate date range based on period
+    const now = new Date();
+    let startDate, endDate;
+    
+    if (period === 'weekly') {
+      // Last 7 days
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 7);
+      endDate = now;
+    } else {
+      // Current month
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    }
+
+    // Fetch learning reports to get demo data
+    const learningReports = await LearningReport.find({
+      'reportData.Online demo counts': { $exists: true },
+      lastUpdatedAt: { $gte: startDate, $lte: endDate }
+    })
+    .populate('user', 'name email author_id')
+    .lean();
+
+    const onlineDemos = [];
+    const offlineDemos = [];
+
+    learningReports.forEach(report => {
+      const reportData = report.reportData || {};
+      
+      // Extract online demo data
+      const onlineDemoCounts = reportData['Online demo counts'] || {};
+      const onlineDemoRatings = reportData['Online demo ratings Average'] || {};
+      
+      Object.keys(onlineDemoCounts).forEach(course => {
+        const count = parseFloat(onlineDemoCounts[course]) || 0;
+        const rating = parseFloat(onlineDemoRatings[course]) || 0;
+        
+        if (count > 0) {
+          onlineDemos.push({
+            traineeName: report.user?.name || 'N/A',
+            traineeId: report.user?.author_id || report.author_id,
+            course: course,
+            count: count,
+            rating: rating,
+            date: report.lastUpdatedAt,
+            status: 'approved' // Default status
+          });
+        }
+      });
+
+      // Extract offline demo data
+      const offlineDemoCounts = reportData['Offline demo counts'] || {};
+      const offlineDemoRatings = reportData['Offline demo ratings Average'] || {};
+      
+      Object.keys(offlineDemoCounts).forEach(course => {
+        const count = parseFloat(offlineDemoCounts[course]) || 0;
+        const rating = parseFloat(offlineDemoRatings[course]) || 0;
+        
+        if (count > 0) {
+          offlineDemos.push({
+            traineeName: report.user?.name || 'N/A',
+            traineeId: report.user?.author_id || report.author_id,
+            course: course,
+            count: count,
+            rating: rating,
+            date: report.lastUpdatedAt,
+            status: 'approved' // Default status
+          });
+        }
+      });
+    });
+
+    // Group by weekly/monthly
+    const weeklyOnline = onlineDemos.filter(d => {
+      const daysDiff = Math.floor((endDate - d.date) / (1000 * 60 * 60 * 24));
+      return daysDiff <= 7;
+    });
+    
+    const monthlyOnline = onlineDemos;
+    
+    const weeklyOffline = offlineDemos.filter(d => {
+      const daysDiff = Math.floor((endDate - d.date) / (1000 * 60 * 60 * 24));
+      return daysDiff <= 7;
+    });
+    
+    const monthlyOffline = offlineDemos;
+
+    res.json({
+      success: true,
+      data: {
+        online: {
+          weekly: weeklyOnline,
+          monthly: monthlyOnline
+        },
+        offline: {
+          weekly: weeklyOffline,
+          monthly: monthlyOffline
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching demos report:', error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error", 
+      error: error.message 
+    });
+  }
+};
+
+// @desc    Get attendance and grooming report
+// @route   GET /api/reports/attendance-grooming
+// @access  Private (Admin)
+const getAttendanceGroomingReport = async (req, res) => {
+  try {
+    const { period = 'weekly' } = req.query;
+    
+    // Calculate date range based on period
+    const now = new Date();
+    let startDate, endDate;
+    
+    if (period === 'weekly') {
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 7);
+      endDate = now;
+    } else {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    }
+
+    // Fetch attendance data
+    const attendanceRecords = await Attendance.find({
+      date: { $gte: startDate, $lte: endDate }
+    }).lean();
+
+    let presentCount = 0;
+    let leaveCount = 0;
+    let absentCount = 0;
+
+    attendanceRecords.forEach(record => {
+      if (record.status === 'present') {
+        presentCount++;
+      } else if (record.status === 'leave' || record.status === 'half_day') {
+        leaveCount++;
+      } else if (record.status === 'absent') {
+        absentCount++;
+      }
+    });
+
+    // Fetch grooming data from GroomingReport
+    const groomingReports = await GroomingReport.find({
+      lastUpdatedAt: { $gte: startDate, $lte: endDate }
+    })
+    .populate('user', 'name email author_id')
+    .lean();
+
+    let dressCodeCount = 0;
+    let hairCount = 0;
+    let beardCount = 0;
+
+    groomingReports.forEach(report => {
+      const reportData = report.reportData || {};
+      
+      // Count from date-based entries (YYYY-MM-DD format)
+      Object.keys(reportData).forEach(key => {
+        // Check if key is a date (YYYY-MM-DD format)
+        if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+          const date = new Date(key);
+          if (date >= startDate && date <= endDate) {
+            const dayData = reportData[key];
+            
+            // Check if grooming status is "Dresscode NotFollowed"
+            if (dayData && (
+                dayData.grooming === 'Dresscode NotFollowed' || 
+                dayData.status === 'Dresscode NotFollowed' ||
+                dayData.dresscodeStatus === 'notFollowed' ||
+                dayData === 'Dresscode NotFollowed')) {
+              dressCodeCount++;
+            }
+            
+            // For hair and beard, check if there are specific fields
+            // If not available, use dress code count as fallback
+            if (dayData && typeof dayData === 'object') {
+              // Check for hair-specific fields (if they exist in the future)
+              if (dayData.hair === 'notFollowed' || dayData.hairStatus === 'notFollowed') {
+                hairCount++;
+              }
+              // Check for beard-specific fields (if they exist in the future)
+              if (dayData.beard === 'notFollowed' || dayData.beardStatus === 'notFollowed') {
+                beardCount++;
+              }
+            }
+          }
+        }
+      });
+      
+      // Also count from month-based structure as fallback
+      const missedGrooming = reportData['How many times missed grooming check list'] || {};
+      Object.values(missedGrooming).forEach(value => {
+        if (typeof value === 'string' && value !== 'Dresscode Followed') {
+          const missed = parseFloat(value) || 0;
+          if (missed > 0) {
+            dressCodeCount += missed;
+            // Use same count for hair and beard if not already counted
+            if (hairCount === 0) hairCount += missed;
+            if (beardCount === 0) beardCount += missed;
+          }
+        }
+      });
+    });
+
+    res.json({
+      success: true,
+      data: {
+        attendance: {
+          present: presentCount,
+          leave: leaveCount,
+          absent: absentCount
+        },
+        grooming: {
+          dressCode: dressCodeCount,
+          hair: hairCount,
+          beard: beardCount
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching attendance/grooming report:', error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error", 
+      error: error.message 
+    });
+  }
+};
+
+// @desc    Get fortnight exam report
+// @route   GET /api/reports/fortnight
+// @access  Private (Admin)
+const getFortnightReport = async (req, res) => {
+  try {
+    const { period = 'weekly' } = req.query;
+    
+    // Calculate date range based on period
+    const now = new Date();
+    let startDate, endDate;
+    
+    if (period === 'weekly') {
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 7);
+      endDate = now;
+    } else {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    }
+
+    // Fetch Results for fortnight exams
+    const fortnightResults = await Result.find({
+      exam_type: { $regex: /fortnight/i },
+      exam_date: { $gte: startDate, $lte: endDate }
+    }).lean();
+
+    // Calculate overall average
+    let totalScore = 0;
+    let totalAttempts = 0;
+    
+    fortnightResults.forEach(result => {
+      const percentage = parseFloat(result.percentage) || 0;
+      if (percentage > 0) {
+        totalScore += percentage;
+        totalAttempts++;
+      }
+    });
+
+    const overallAverage = totalAttempts > 0 ? (totalScore / totalAttempts) : 0;
+
+    // Calculate course-wise averages
+    const courseWiseData = {};
+    
+    fortnightResults.forEach(result => {
+      // Extract course name from exam_type (e.g., "fortnight1 Static" -> "Static")
+      const examType = result.exam_type || 'Unknown';
+      let courseName = examType;
+      
+      // Try to extract course name if exam_type contains course name
+      // Common patterns: "fortnight1 Static", "Fortnight Static", etc.
+      const courseMatch = examType.match(/(?:fortnight\d*\s*)?(.+)/i);
+      if (courseMatch && courseMatch[1]) {
+        courseName = courseMatch[1].trim();
+      }
+      
+      // If still contains "fortnight", try to remove it
+      courseName = courseName.replace(/fortnight\d*/gi, '').trim();
+      if (!courseName || courseName === '') {
+        courseName = examType; // Fallback to original
+      }
+      
+      const percentage = parseFloat(result.percentage) || 0;
+      
+      if (!courseWiseData[courseName]) {
+        courseWiseData[courseName] = {
+          totalScore: 0,
+          totalAttempts: 0
+        };
+      }
+      
+      if (percentage > 0) {
+        courseWiseData[courseName].totalScore += percentage;
+        courseWiseData[courseName].totalAttempts++;
+      }
+    });
+
+    const courseWise = Object.keys(courseWiseData)
+      .filter(courseName => courseWiseData[courseName].totalAttempts > 0) // Only include courses with attempts
+      .map(courseName => ({
+        courseName: courseName,
+        averageRating: courseWiseData[courseName].totalAttempts > 0 
+          ? (courseWiseData[courseName].totalScore / courseWiseData[courseName].totalAttempts)
+          : 0,
+        totalAttempts: courseWiseData[courseName].totalAttempts
+      }))
+      .sort((a, b) => b.averageRating - a.averageRating); // Sort by average rating descending
+
+    res.json({
+      success: true,
+      data: {
+        overallAverage: overallAverage,
+        courseWise: courseWise
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching fortnight report:', error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error", 
+      error: error.message 
+    });
+  }
+};
+
 module.exports = {
   generateAttendanceReport,
   generateDayPlanComplianceReport,
   generateObservationReport,
   generateAssignmentReport,
-  generateAuditLog
+  generateAuditLog,
+  getDemosReport,
+  getAttendanceGroomingReport,
+  getFortnightReport
 };
