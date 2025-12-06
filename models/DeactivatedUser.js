@@ -44,7 +44,7 @@ const DeactivatedUserSchema = new mongoose.Schema(
       remarks: { type: String, default: null },
       category: {
         type: String,
-        enum: ['voluntary', 'performance', 'disciplinary', 'resignation', 'termination', 'other'],
+        enum: ['Resigned', 'Terminated', 'Joined and Exit', 'Absconded', 'BGV Failed', 'Deployed', 'other'],
         default: 'other'
       },
       severity: {

@@ -635,44 +635,250 @@ const getAttendanceGroomingReport = async (req, res) => {
     if (period === 'weekly') {
       startDate = new Date(now);
       startDate.setDate(startDate.getDate() - 7);
-      endDate = now;
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
     } else {
       startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      startDate.setHours(0, 0, 0, 0);
       endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      endDate.setHours(23, 59, 59, 999);
     }
 
-    // Fetch attendance data
-    const attendanceRecords = await Attendance.find({
-      date: { $gte: startDate, $lte: endDate }
-    }).lean();
+    // Get total number of ACTIVE trainees only
+    const totalTrainees = await User.countDocuments({ 
+      role: 'trainee',
+      $or: [
+        { isActive: true, accountStatus: { $ne: 'deactivated' } },
+        { isActive: true, status: 'active' }
+      ]
+    });
 
+    // Helper function to check if a month key falls within date range
+    const isMonthInRange = (monthKey, start, end) => {
+      const monthOrder = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JULY', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      
+      // Try to match "NOV'25" format
+      let monthMatch = monthKey.match(/([A-Z]+)'(\d{2})/);
+      let monthAbbr, year;
+      
+      if (monthMatch) {
+        monthAbbr = monthMatch[1];
+        year = '20' + monthMatch[2];
+      } else {
+        // Try to match "November Month" format
+        const monthNameToFormatted = {
+          "January Month": "JAN", "February Month": "FEB", "March Month": "MAR", "April Month": "APR",
+          "May Month": "MAY", "June Month": "JUN", "July Month": "JULY", "August Month": "AUG",
+          "September Month": "SEP", "October Month": "OCT", "November Month": "NOV", "December Month": "DEC"
+        };
+        
+        if (monthNameToFormatted[monthKey]) {
+          monthAbbr = monthNameToFormatted[monthKey];
+          // Default to current year if not specified
+          year = now.getFullYear().toString();
+        } else {
+          // Try numeric month (1-12)
+          const monthNum = parseInt(monthKey);
+          if (monthNum >= 1 && monthNum <= 12) {
+            monthAbbr = monthOrder[monthNum - 1];
+            year = now.getFullYear().toString();
+          } else {
+            return false;
+          }
+        }
+      }
+      
+      const monthIndex = monthOrder.indexOf(monthAbbr);
+      if (monthIndex !== -1) {
+        const monthStart = new Date(parseInt(year), monthIndex, 1);
+        monthStart.setHours(0, 0, 0, 0);
+        const monthEnd = new Date(parseInt(year), monthIndex + 1, 0);
+        monthEnd.setHours(23, 59, 59, 999);
+        // Check if month overlaps with date range
+        return (monthStart <= end && monthEnd >= start);
+      }
+      return false;
+    };
+
+    // Fetch attendance data from AttendanceReport collection
+    const attendanceReports = await AttendanceReport.find({})
+      .populate('user', 'name email author_id isActive accountStatus status')
+      .lean();
+
+    console.log(`Found ${attendanceReports.length} attendance reports`);
+
+    // Filter for active trainees only and populate user if missing
+    const activeAttendanceReports = [];
+    for (const report of attendanceReports) {
+      let user = report.user;
+      
+      // If user is not populated, try to find it by author_id
+      if (!user && report.author_id) {
+        user = await User.findOne({ author_id: report.author_id })
+          .select('name email author_id isActive accountStatus status')
+          .lean();
+      }
+      
+      // Also try to find by user ID if user field exists but is not populated
+      if (!user && report.user) {
+        const userId = typeof report.user === 'string' ? report.user : report.user.toString();
+        user = await User.findById(userId)
+          .select('name email author_id isActive accountStatus status')
+          .lean();
+      }
+      
+      if (!user) continue;
+      
+      // Check if user is an active trainee
+      const isActiveTrainee = user.role === 'trainee' && 
+                             user.isActive === true && 
+                             (user.accountStatus !== 'deactivated' || user.status === 'active');
+      
+      if (isActiveTrainee) {
+        // Attach user to report for later use
+        report.user = user;
+        activeAttendanceReports.push(report);
+      }
+    }
+
+    console.log(`Filtered to ${activeAttendanceReports.length} active trainee reports`);
+
+    // Count records by status
     let presentCount = 0;
     let leaveCount = 0;
     let absentCount = 0;
 
-    attendanceRecords.forEach(record => {
-      if (record.status === 'present') {
-        presentCount++;
-      } else if (record.status === 'leave' || record.status === 'half_day') {
-        leaveCount++;
-      } else if (record.status === 'absent') {
-        absentCount++;
+    // Track unique trainees for summary
+    const presentTrainees = new Set();
+    const absentTrainees = new Set();
+    const leaveTrainees = new Set();
+
+    // Helper to find value by multiple variations
+    const findAttendanceValue = (obj, variations) => {
+      if (!obj || typeof obj !== 'object') return null;
+      for (const variation of variations) {
+        if (obj[variation] !== undefined && obj[variation] !== null) {
+          return obj[variation];
+        }
       }
+      const lowerVariations = variations.map(v => v.toLowerCase().trim());
+      for (const key in obj) {
+        const lowerKey = key.toLowerCase().trim();
+        if (lowerVariations.includes(lowerKey) && obj[key] !== null && obj[key] !== undefined) {
+          return obj[key];
+        }
+      }
+      return null;
+    };
+
+    activeAttendanceReports.forEach(report => {
+      const userId = report.user ? (report.user._id ? report.user._id.toString() : report.user.toString()) : null;
+      if (!userId || !report.reportData) {
+        console.log('Skipping report - no userId or reportData', { userId: !!userId, hasReportData: !!report.reportData });
+        return;
+      }
+
+      const reportData = report.reportData;
+      
+      // Debug: log first report structure
+      if (activeAttendanceReports.indexOf(report) === 0) {
+        console.log('Sample reportData keys:', Object.keys(reportData));
+        console.log('Sample totalWorkingDays keys:', Object.keys(findAttendanceValue(reportData, [
+          'Total Working Days', 'total working days', 'Total working days', 'totalWorkingDays', 'workingDays', 'Working Days'
+        ]) || {}));
+      }
+      
+      // Get attendance data objects
+      const totalWorkingDaysObj = findAttendanceValue(reportData, [
+        'Total Working Days', 'total working days', 'Total working days', 'totalWorkingDays', 'workingDays', 'Working Days'
+      ]) || {};
+      
+      const daysAttendedObj = findAttendanceValue(reportData, [
+        'No of days attended', 'No Of Days Attended', 'No of Days Attended', 'daysAttended', 'noOfDaysAttended', 'Days Attended'
+      ]) || {};
+      
+      const leavesTakenObj = findAttendanceValue(reportData, [
+        'No of leaves taken', 'No Of Leaves Taken', 'No of Leaves Taken', 
+        'No of leave taken', 'No Of Leave Taken', 'No of Leave Taken',
+        'leavesTaken', 'noOfLeavesTaken', 'Leaves Taken',
+        'Leaves', 'Leave', 'leaves', 'leave',
+        'No of Leaves', 'No Of Leaves', 'Number of Leaves', 'Number Of Leaves',
+        'Total Leaves', 'Total leaves'
+      ]) || {};
+
+      // Process each month in the date range
+      // Get all possible month keys from all three objects
+      const allMonthKeys = new Set([
+        ...Object.keys(totalWorkingDaysObj),
+        ...Object.keys(daysAttendedObj),
+        ...Object.keys(leavesTakenObj)
+      ]);
+
+      allMonthKeys.forEach(monthKey => {
+        // Check if this month overlaps with the date range
+        const inRange = isMonthInRange(monthKey, startDate, endDate);
+        if (!inRange) {
+          return;
+        }
+
+        // Get values for this month key
+        const workingDays = Number(totalWorkingDaysObj[monthKey]) || 0;
+        const attended = Number(daysAttendedObj[monthKey]) || 0;
+        const leaves = Number(leavesTakenObj[monthKey]) || 0;
+
+        // For weekly view, we might want to include partial month data
+        // For now, include all months that overlap with the date range
+        if (workingDays > 0 || attended > 0 || leaves > 0) {
+          // Count present days
+          presentCount += attended;
+          if (attended > 0) {
+            presentTrainees.add(userId);
+          }
+
+          // Count leave days
+          leaveCount += leaves;
+          if (leaves > 0) {
+            leaveTrainees.add(userId);
+          }
+
+          // Count absent days (working days - attended - leaves)
+          // If workingDays is 0 but we have attended/leaves, calculate workingDays
+          const actualWorkingDays = workingDays > 0 ? workingDays : (attended + leaves);
+          const absent = actualWorkingDays - attended - leaves;
+          if (absent > 0) {
+            absentCount += absent;
+            absentTrainees.add(userId);
+          }
+        }
+      });
     });
 
-    // Fetch grooming data from GroomingReport
-    const groomingReports = await GroomingReport.find({
-      lastUpdatedAt: { $gte: startDate, $lte: endDate }
-    })
-    .populate('user', 'name email author_id')
-    .lean();
+    // Fetch grooming data from GroomingReport - filter for active trainees only
+    const groomingReports = await GroomingReport.find({})
+      .populate('user', 'name email author_id isActive accountStatus status')
+      .lean();
+
+    // Filter for active trainees only
+    const activeGroomingReports = groomingReports.filter(report => {
+      if (!report.user) return false;
+      const user = report.user;
+      return user.isActive === true && 
+             (user.accountStatus !== 'deactivated' || user.status === 'active');
+    });
 
     let dressCodeCount = 0;
     let hairCount = 0;
     let beardCount = 0;
 
-    groomingReports.forEach(report => {
+    // Track unique trainees for grooming summary
+    const compliantTrainees = new Set();
+    const nonCompliantTrainees = new Set();
+
+    activeGroomingReports.forEach(report => {
+      const userId = report.user ? report.user._id ? report.user._id.toString() : report.user.toString() : null;
       const reportData = report.reportData || {};
+      let hasNonCompliance = false;
       
       // Count from date-based entries (YYYY-MM-DD format)
       Object.keys(reportData).forEach(key => {
@@ -689,18 +895,18 @@ const getAttendanceGroomingReport = async (req, res) => {
                 dayData.dresscodeStatus === 'notFollowed' ||
                 dayData === 'Dresscode NotFollowed')) {
               dressCodeCount++;
+              hasNonCompliance = true;
             }
             
             // For hair and beard, check if there are specific fields
-            // If not available, use dress code count as fallback
             if (dayData && typeof dayData === 'object') {
-              // Check for hair-specific fields (if they exist in the future)
               if (dayData.hair === 'notFollowed' || dayData.hairStatus === 'notFollowed') {
                 hairCount++;
+                hasNonCompliance = true;
               }
-              // Check for beard-specific fields (if they exist in the future)
               if (dayData.beard === 'notFollowed' || dayData.beardStatus === 'notFollowed') {
                 beardCount++;
+                hasNonCompliance = true;
               }
             }
           }
@@ -714,17 +920,43 @@ const getAttendanceGroomingReport = async (req, res) => {
           const missed = parseFloat(value) || 0;
           if (missed > 0) {
             dressCodeCount += missed;
-            // Use same count for hair and beard if not already counted
+            hasNonCompliance = true;
             if (hairCount === 0) hairCount += missed;
             if (beardCount === 0) beardCount += missed;
           }
         }
       });
+
+      // Track compliance status
+      if (userId) {
+        if (hasNonCompliance) {
+          nonCompliantTrainees.add(userId);
+        } else {
+          compliantTrainees.add(userId);
+        }
+      }
     });
+
+    // Calculate summary
+    const totalPresentTrainees = presentTrainees.size;
+    const totalAbsentTrainees = new Set([...absentTrainees, ...leaveTrainees]).size;
+    const totalCompliantTrainees = compliantTrainees.size;
+    const totalNonCompliantTrainees = nonCompliantTrainees.size;
 
     res.json({
       success: true,
       data: {
+        summary: {
+          totalTrainees: totalTrainees,
+          attendance: {
+            totalPresent: totalPresentTrainees,
+            totalAbsent: totalAbsentTrainees
+          },
+          grooming: {
+            totalCompliant: totalCompliantTrainees,
+            totalNonCompliant: totalNonCompliantTrainees
+          }
+        },
         attendance: {
           present: presentCount,
           leave: leaveCount,
@@ -753,7 +985,7 @@ const getAttendanceGroomingReport = async (req, res) => {
 // @access  Private (Admin)
 const getFortnightReport = async (req, res) => {
   try {
-    const { period = 'weekly' } = req.query;
+    const { period = 'weekly', month, year } = req.query;
     
     // Calculate date range based on period
     const now = new Date();
@@ -768,11 +1000,67 @@ const getFortnightReport = async (req, res) => {
       endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     }
 
-    // Fetch Results for fortnight exams
-    const fortnightResults = await Result.find({
-      exam_type: { $regex: /fortnight/i },
-      exam_date: { $gte: startDate, $lte: endDate }
+    // First, let's check what exam types exist in the database
+    const allExamTypes = await Result.distinct('exam_type');
+    console.log('All exam types in database:', allExamTypes);
+    
+    // Fetch Results for fortnight exams - use multiple patterns to catch variations
+    // Try different patterns: fortnight, fornight (common typo), etc.
+    const allFortnightResults = await Result.find({
+      $or: [
+        { exam_type: { $regex: /fortnight/i } },
+        { exam_type: { $regex: /fornight/i } }, // Common typo
+        { exam_type: { $regex: /^fortnight/i } },
+        { exam_type: { $regex: /^fornight/i } }
+      ]
     }).lean();
+
+    console.log(`Total fortnight results found: ${allFortnightResults.length}`);
+    if (allFortnightResults.length > 0) {
+      console.log('Sample result:', {
+        exam_type: allFortnightResults[0].exam_type,
+        exam_date: allFortnightResults[0].exam_date,
+        author_id: allFortnightResults[0].author_id,
+        percentage: allFortnightResults[0].percentage
+      });
+    }
+    
+    // Filter by date range in application logic
+    let fortnightResults = allFortnightResults.filter(result => {
+      if (!result.exam_date) {
+        console.log('Result missing exam_date:', result._id);
+        return false;
+      }
+      const examDate = new Date(result.exam_date);
+      if (isNaN(examDate.getTime())) {
+        console.log('Invalid exam_date:', result.exam_date, 'for result:', result._id);
+        return false;
+      }
+      // Set time to start/end of day for proper comparison
+      const examDateOnly = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate());
+      const startDateOnly = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+      const endDateOnly = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+      return examDateOnly >= startDateOnly && examDateOnly <= endDateOnly;
+    });
+
+    console.log(`Fortnight results in date range (${startDate.toISOString()} to ${endDate.toISOString()}): ${fortnightResults.length}`);
+    
+    // If no results in date range, show all results (for debugging/development)
+    if (fortnightResults.length === 0 && allFortnightResults.length > 0) {
+      console.log('No results in date range, showing all results instead');
+      fortnightResults = allFortnightResults;
+    }
+
+    // Get total trainee count (only active users)
+    const totalTraineeCount = await User.countDocuments({ isActive: true });
+    
+    // Get number of terminated candidates (inactive users)
+    const terminatedCount = await User.countDocuments({ isActive: false });
+    
+    // Get number of eligible candidates (active users) - same as total trainee count
+    const eligibleCount = totalTraineeCount;
+
+    console.log(`Total trainees: ${totalTraineeCount}, Eligible: ${eligibleCount}, Terminated: ${terminatedCount}`);
 
     // Calculate overall average
     let totalScore = 0;
@@ -787,6 +1075,155 @@ const getFortnightReport = async (req, res) => {
     });
 
     const overallAverage = totalAttempts > 0 ? (totalScore / totalAttempts) : 0;
+
+    // Group results by exam_date and extract fortnight details
+    const detailedReports = {};
+    
+    if (fortnightResults.length === 0) {
+      console.log('No fortnight results found in the specified date range');
+    }
+    
+    fortnightResults.forEach(result => {
+      if (!result.exam_date) {
+        console.log('Result missing exam_date:', result._id);
+        return;
+      }
+      
+      const examDate = new Date(result.exam_date);
+      if (isNaN(examDate.getTime())) {
+        console.log('Invalid exam_date:', result.exam_date, 'for result:', result._id);
+        return;
+      }
+      
+      const dateKey = examDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+      
+      // Extract fortnight number from exam_type (e.g., "fortnight1" -> 1, "fortnight2" -> 2)
+      const examType = result.exam_type || '';
+      const fortnightMatch = examType.match(/fortnight(\d+)/i);
+      const fortnightNumber = fortnightMatch ? parseInt(fortnightMatch[1]) : null;
+      
+      if (!detailedReports[dateKey]) {
+        detailedReports[dateKey] = {
+          date: dateKey,
+          examDate: examDate,
+          month: examDate.toLocaleString('default', { month: 'long' }),
+          year: examDate.getFullYear(),
+          fortnightNumber: fortnightNumber,
+          uniqueAttempts: new Set(),
+          percentages: [],
+          totalScore: 0,
+          attemptCount: 0
+        };
+      }
+      
+      // Track unique attempts by author_id
+      if (result.author_id) {
+        detailedReports[dateKey].uniqueAttempts.add(result.author_id);
+      }
+      const percentage = parseFloat(result.percentage) || 0;
+      detailedReports[dateKey].percentages.push(percentage);
+      detailedReports[dateKey].totalScore += percentage;
+      detailedReports[dateKey].attemptCount++;
+      
+      // Update fortnight number if not set or if this one is more specific
+      if (fortnightNumber && (!detailedReports[dateKey].fortnightNumber || detailedReports[dateKey].fortnightNumber < fortnightNumber)) {
+        detailedReports[dateKey].fortnightNumber = fortnightNumber;
+      }
+    });
+    
+    console.log(`Grouped into ${Object.keys(detailedReports).length} unique dates`);
+
+    // Convert to array and calculate metrics for each date
+    const detailedReportArray = Object.values(detailedReports).map(report => {
+      const attemptedCount = report.uniqueAttempts.size;
+      const absenteesCount = eligibleCount - attemptedCount;
+      const averagePercentage = report.percentages.length > 0 
+        ? (report.totalScore / report.percentages.length) 
+        : 0;
+
+      // Format date as "DD-MMM-YYYY" (e.g., "8-Nov-2025")
+      const day = report.examDate.getDate();
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const monthAbbr = monthNames[report.examDate.getMonth()];
+      const year = report.examDate.getFullYear();
+      const formattedDate = `${day}-${monthAbbr}-${year}`;
+      
+      // Format month and year as "{Month} - {Year}" (e.g., "November - 2025")
+      const monthYear = `${report.month} - ${report.year}`;
+
+      return {
+        month: report.month,
+        year: report.year,
+        monthYear: monthYear,
+        date: report.date,
+        formattedDate: formattedDate,
+        fortnightNumber: report.fortnightNumber || 'N/A',
+        totalTraineeCount: totalTraineeCount,
+        eligibleCount: eligibleCount,
+        attemptedCount: attemptedCount,
+        absenteesCount: absenteesCount > 0 ? absenteesCount : 0,
+        terminatedCount: terminatedCount,
+        averagePercentage: parseFloat(averagePercentage.toFixed(2))
+      };
+    }).sort((a, b) => new Date(b.date) - new Date(a.date)); // Sort by date descending
+
+    console.log(`Final detailed reports array length: ${detailedReportArray.length}`);
+
+    // If month and year are provided, calculate aggregated monthly report
+    let monthlyReport = null;
+    if (month && year) {
+      const monthNum = parseInt(month);
+      const yearNum = parseInt(year);
+      
+      // Filter results for the specific month/year
+      const monthlyResults = allFortnightResults.filter(result => {
+        if (!result.exam_date) return false;
+        const examDate = new Date(result.exam_date);
+        if (isNaN(examDate.getTime())) return false;
+        return examDate.getFullYear() === yearNum && examDate.getMonth() === (monthNum - 1);
+      });
+      
+      // Aggregate data for the month
+      const uniqueAttempts = new Set();
+      const percentages = [];
+      let totalScore = 0;
+      let maxFortnightNumber = null;
+      
+      monthlyResults.forEach(result => {
+        if (result.author_id) {
+          uniqueAttempts.add(result.author_id);
+        }
+        const percentage = parseFloat(result.percentage) || 0;
+        percentages.push(percentage);
+        totalScore += percentage;
+        
+        // Extract fortnight number
+        const examType = result.exam_type || '';
+        const fortnightMatch = examType.match(/fortnight(\d+)/i);
+        if (fortnightMatch) {
+          const fortnightNum = parseInt(fortnightMatch[1]);
+          if (maxFortnightNumber === null || fortnightNum > maxFortnightNumber) {
+            maxFortnightNumber = fortnightNum;
+          }
+        }
+      });
+      
+      const attemptedCount = uniqueAttempts.size;
+      const absenteesCount = eligibleCount - attemptedCount;
+      const averagePercentage = percentages.length > 0 
+        ? (totalScore / percentages.length) 
+        : 0;
+      
+      monthlyReport = {
+        fortnightNumber: maxFortnightNumber || 'N/A',
+        totalTraineeCount: totalTraineeCount,
+        eligibleCount: eligibleCount,
+        attemptedCount: attemptedCount,
+        absenteesCount: absenteesCount > 0 ? absenteesCount : 0,
+        terminatedCount: terminatedCount,
+        averagePercentage: parseFloat(averagePercentage.toFixed(2))
+      };
+    }
 
     // Calculate course-wise averages
     const courseWiseData = {};
@@ -839,7 +1276,9 @@ const getFortnightReport = async (req, res) => {
       success: true,
       data: {
         overallAverage: overallAverage,
-        courseWise: courseWise
+        courseWise: courseWise,
+        detailedReports: detailedReportArray,
+        monthlyReport: monthlyReport
       }
     });
 

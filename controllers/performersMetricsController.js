@@ -201,13 +201,38 @@ const calculateExamAverages = (learningReport) => {
   }
 
   // Extract course exam scores
+  // Also check Metric 3 for course exam averages
   const courseExamScores = learningReport['Course exam score'] || learningReport['Course Exam Score'] || {};
-  const courseExamValues = Object.values(courseExamScores).filter(v => {
+  const metric3Data = learningReport['Metric 3'] || learningReport['metric 3'] || learningReport['Metric3'] || learningReport['metric3'] || {};
+  
+  // Combine both sources
+  const allCourseExamScores = { ...courseExamScores, ...metric3Data };
+  
+  const courseExamValues = Object.values(allCourseExamScores).filter(v => {
+    // Skip if value contains "(Terminated)" - exclude from average calculation
+    const valueStr = String(v).toLowerCase();
+    if (valueStr.includes('terminated')) {
+      return false;
+    }
+    
+    // Extract numeric value (handle cases like "90 (Terminated)" by extracting just the number)
+    const numMatch = String(v).match(/(\d+(?:\.\d+)?)/);
+    if (numMatch) {
+      const num = parseFloat(numMatch[1]);
+      return !isNaN(num) && num > 0;
+    }
+    
     const num = parseFloat(v);
     return !isNaN(num) && num > 0;
   });
+  
   if (courseExamValues.length > 0) {
-    averages.courseExam = courseExamValues.reduce((a, b) => a + parseFloat(b), 0) / courseExamValues.length;
+    // Extract numeric values from strings if needed
+    const numericValues = courseExamValues.map(v => {
+      const numMatch = String(v).match(/(\d+(?:\.\d+)?)/);
+      return numMatch ? parseFloat(numMatch[1]) : parseFloat(v);
+    });
+    averages.courseExam = numericValues.reduce((a, b) => a + b, 0) / numericValues.length;
   }
 
   // Calculate overall average

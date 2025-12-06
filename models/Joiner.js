@@ -31,6 +31,14 @@ const joinerSchema = new mongoose.Schema({
     match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Please enter a valid email address']
   },
   
+  Company_Maill_ID: {
+    type: String,
+    lowercase: true,
+    trim: true,
+    default: null,
+    match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Please enter a valid email address']
+  },
+  
   phone: {
     type: String,
     required: false,
@@ -93,6 +101,49 @@ const joinerSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: [200, 'Qualification cannot exceed 200 characters'],
+    default: null
+  },
+  
+  // New fields for joiner data
+  Have_M_Tech_PC: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Have M.Tech PC cannot exceed 100 characters'],
+    default: null
+  },
+  
+  Have_M_Tech_OD: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Have M.Tech OD cannot exceed 100 characters'],
+    default: null
+  },
+  
+  Home_State: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Home State cannot exceed 100 characters'],
+    default: null
+  },
+  
+  Year_of_Passout: {
+    type: String,
+    trim: true,
+    maxlength: [10, 'Year of Passout cannot exceed 10 characters'],
+    default: null
+  },
+  
+  Manager: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Manager cannot exceed 100 characters'],
+    default: null
+  },
+  
+  Specialization: {
+    type: String,
+    trim: true,
+    maxlength: [200, 'Specialization cannot exceed 200 characters'],
     default: null
   },
   

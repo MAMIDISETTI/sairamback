@@ -789,19 +789,162 @@ const validateCandidateReportsSheets = async (req, res) => {
           });
         }
 
-        // The Apps Script should return data organized by sub-sheets
-        // Expected structure: { success: true, data: [{ author_id, learningReport, attendanceReport, groomingReport, ... }] }
-        // OR: { DailyQuizReports: [...], FortnightScores: [...], AttendanceReport: [...], GroomingReport: [...] }
-        
+        // Check for nested data structure (e.g., { data: { data: [...] } })
+        let actualDataArray = null;
+        if (sheetData.data && typeof sheetData.data === 'object' && sheetData.data.data && Array.isArray(sheetData.data.data)) {
+          // Nested structure: { data: { data: [...] } }
+          actualDataArray = sheetData.data.data;
+          console.log('Found nested data structure with', actualDataArray.length, 'items');
+        } else if (sheetData.success && sheetData.data && Array.isArray(sheetData.data)) {
+          // Direct structure: { success: true, data: [...] }
+          actualDataArray = sheetData.data;
+          console.log('Found direct data structure with', actualDataArray.length, 'items');
+        } else if (Array.isArray(sheetData)) {
+          // Array structure: [...]
+          actualDataArray = sheetData;
+          console.log('Found array structure with', actualDataArray.length, 'items');
+        } else if (sheetData.data && Array.isArray(sheetData.data)) {
+          // Simple nested: { data: [...] }
+          actualDataArray = sheetData.data;
+          console.log('Found simple nested data with', actualDataArray.length, 'items');
+        }
+      
         let extractedData = [];
         
-        // Check if data is already combined by author_id
-        if (sheetData.success && sheetData.data && Array.isArray(sheetData.data)) {
-          extractedData = sheetData.data;
+        // Check if data is already combined by author_id (handle nested structure)
+        // If Apps Script already returned { success: true, data: [...] } that includes interactions,
+        // we should NOT modify it – just pass it through.
+        if (actualDataArray && Array.isArray(actualDataArray) && sheetData.success) {
+          extractedData = actualDataArray;
+        } else if (actualDataArray && Array.isArray(actualDataArray)) {
+          // First, check if Interactions data is coming separately and needs to be merged
+          // Check both top-level and nested data structure
+          const topLevelInteractionsKey = sheetData['Interactions'] ? 'Interactions' : (sheetData['interactions'] ? 'interactions' : null);
+          const nestedInteractionsKey = sheetData.data && typeof sheetData.data === 'object' 
+            ? (sheetData.data['Interactions'] ? 'Interactions' : (sheetData.data['interactions'] ? 'interactions' : null))
+            : null;
+          
+          const interactionsKey = topLevelInteractionsKey || nestedInteractionsKey;
+          const interactionsSource = topLevelInteractionsKey ? sheetData : (nestedInteractionsKey ? sheetData.data : null);
+          const interactionsMap = new Map();
+          
+          // If Interactions data exists separately, build a map by author_id
+          if (interactionsKey && interactionsSource && Array.isArray(interactionsSource[interactionsKey])) {
+            console.log(`Found ${interactionsSource[interactionsKey].length} interactions to merge from separate sheet`);
+            interactionsSource[interactionsKey].forEach(item => {
+              const authorId = (item.author_id || item.authorId || '').trim();
+              if (authorId) {
+                if (!interactionsMap.has(authorId)) {
+                  interactionsMap.set(authorId, []);
+                }
+                interactionsMap.get(authorId).push(item);
+              }
+            });
+          }
+          
+          // Normalize interactions/interactionsReport fields for pre-combined data
+          extractedData = actualDataArray.map(item => {
+            const authorId = (item.author_id || item.authorId || '').trim();
+            
+            // Check for interactions data in various possible key names
+            let interactionsData = item.interactionsReport || item.interactions || item.Interactions || null;
+            
+            // If interactions exists but is empty array, check if we have data in the map
+            if ((!interactionsData || (Array.isArray(interactionsData) && interactionsData.length === 0)) && interactionsMap.has(authorId)) {
+              interactionsData = interactionsMap.get(authorId);
+              console.log(`✓ Merged ${interactionsData.length} interactions for author_id: ${authorId} (was empty)`);
+            }
+            
+            // Log if we still have empty interactions for debugging
+            if (!interactionsData || (Array.isArray(interactionsData) && interactionsData.length === 0)) {
+              interactionsData = [];
+            }
+            
+            // Ensure interactionsReport is always an array (even if empty)
+            if (!interactionsData) {
+              item.interactionsReport = [];
+            } else if (!Array.isArray(interactionsData)) {
+              // If it's not an array, convert it to an array
+              item.interactionsReport = [interactionsData];
+            } else {
+              item.interactionsReport = interactionsData;
+            }
+            
+            // Also add/update the 'interactions' field for frontend compatibility
+            // Use the same data as interactionsReport
+            item.interactions = Array.isArray(item.interactionsReport) ? item.interactionsReport : [];
+            
+            return item;
+          });
         } else if (Array.isArray(sheetData)) {
-          extractedData = sheetData;
+          // Check if Interactions data is coming separately
+          // This shouldn't happen with array format, but handle it just in case
+          // Normalize interactions/interactionsReport fields for direct array data
+          extractedData = sheetData.map(item => {
+            // Check for interactions data in various possible key names
+            let interactionsData = item.interactionsReport || item.interactions || item.Interactions || null;
+            
+            if (!interactionsData) {
+              item.interactionsReport = [];
+            } else if (!Array.isArray(interactionsData)) {
+              item.interactionsReport = [interactionsData];
+            } else {
+              item.interactionsReport = interactionsData;
+            }
+            
+            if (!item.interactions) {
+              item.interactions = Array.isArray(item.interactionsReport) ? item.interactionsReport : [];
+            } else if (!Array.isArray(item.interactions)) {
+              item.interactions = [item.interactions];
+            }
+            return item;
+          });
         } else if (sheetData.data && Array.isArray(sheetData.data)) {
-          extractedData = sheetData.data;
+          // Handle nested data structure (e.g., { data: [...] })
+          // Check if Interactions data is coming separately
+          const interactionsKey = sheetData['Interactions'] ? 'Interactions' : (sheetData['interactions'] ? 'interactions' : null);
+          const interactionsMap = new Map();
+          
+          if (interactionsKey && Array.isArray(sheetData[interactionsKey])) {
+            sheetData[interactionsKey].forEach(item => {
+              const authorId = (item.author_id || item.authorId || '').trim();
+              if (authorId) {
+                if (!interactionsMap.has(authorId)) {
+                  interactionsMap.set(authorId, []);
+                }
+                interactionsMap.get(authorId).push(item);
+              }
+            });
+          }
+          
+          // Normalize interactions/interactionsReport fields for nested data
+          extractedData = sheetData.data.map(item => {
+            const authorId = (item.author_id || item.authorId || '').trim();
+            
+            // Check for interactions data in various possible key names
+            let interactionsData = item.interactionsReport || item.interactions || item.Interactions || null;
+            
+            // If no interactions data in the item, check if we have it in the map
+            if (!interactionsData && interactionsMap.has(authorId)) {
+              interactionsData = interactionsMap.get(authorId);
+              console.log(`Merged ${interactionsData.length} interactions for author_id: ${authorId} (nested)`);
+            }
+            
+            if (!interactionsData) {
+              item.interactionsReport = [];
+            } else if (!Array.isArray(interactionsData)) {
+              item.interactionsReport = [interactionsData];
+            } else {
+              item.interactionsReport = interactionsData;
+            }
+            
+            if (!item.interactions) {
+              item.interactions = Array.isArray(item.interactionsReport) ? item.interactionsReport : [];
+            } else if (!Array.isArray(item.interactions)) {
+              item.interactions = [item.interactions];
+            }
+            return item;
+          });
         } else {
           // If data is organized by sub-sheet names, combine them
           const combinedData = {};
@@ -870,8 +1013,42 @@ const validateCandidateReportsSheets = async (req, res) => {
             });
           }
           
-          // Convert combined data object to array
-          extractedData = Object.values(combinedData);
+          // Interactions Report sub-sheet (handle both "Interactions" and "interactions")
+          // Multiple interactions can belong to the same author_id, so we need to accumulate them into an array
+          const interactionsKey = sheetData['Interactions'] ? 'Interactions' : (sheetData['interactions'] ? 'interactions' : null);
+          if (interactionsKey && Array.isArray(sheetData[interactionsKey])) {
+            sheetData[interactionsKey].forEach(item => {
+              const authorId = item.author_id || item.authorId;
+              if (authorId) {
+                if (!combinedData[authorId]) {
+                  combinedData[authorId] = { author_id: authorId };
+                }
+                // Initialize interactionsReport as an array if it doesn't exist
+                if (!combinedData[authorId].interactionsReport) {
+                  combinedData[authorId].interactionsReport = [];
+                }
+                // Ensure it's an array (in case it was set as an object previously)
+                if (!Array.isArray(combinedData[authorId].interactionsReport)) {
+                  combinedData[authorId].interactionsReport = [combinedData[authorId].interactionsReport];
+                }
+                // Add the new interaction to the array
+                combinedData[authorId].interactionsReport.push(item);
+              }
+            });
+          }
+          
+          // Convert combined data object to array and ensure interactions/interactionsReport fields exist
+          extractedData = Object.values(combinedData).map(item => {
+            // Ensure interactionsReport is always an array (even if empty)
+            if (!item.interactionsReport) {
+              item.interactionsReport = [];
+            }
+            // Also add an 'interactions' field for frontend compatibility
+            if (!item.interactions) {
+              item.interactions = Array.isArray(item.interactionsReport) ? item.interactionsReport : [];
+            }
+            return item;
+          });
         }
         
         reportsData = extractedData;

@@ -47,25 +47,69 @@ const validateGoogleSheets = async (req, res) => {
           });
         }
 
-        // Check if spread_sheet_name matches
-        if (sheetData.spread_sheet_name !== spread_sheet_name) {
-          return res.status(400).json({
-            message: 'Spreadsheet name does not match',
-            expected: spread_sheet_name,
-            actual: sheetData.spread_sheet_name
-          });
+        // Log what we received for debugging
+
+        // Validate spread_sheet_name only if it exists in the response
+        // If it doesn't exist, we'll use the one from the request (more flexible)
+        if (sheetData.hasOwnProperty('spread_sheet_name')) {
+          // Check if spread_sheet_name matches (case-insensitive, trimmed)
+          const expectedName = String(spread_sheet_name || '').trim().toLowerCase();
+          const actualName = String(sheetData.spread_sheet_name || '').trim().toLowerCase();
+          
+          if (actualName !== expectedName) {
+            return res.status(400).json({
+              message: 'Spreadsheet name does not match',
+              expected: spread_sheet_name,
+              actual: sheetData.spread_sheet_name,
+              expected_normalized: expectedName,
+              actual_normalized: actualName,
+              hint: `Your Google Apps Script returned "${sheetData.spread_sheet_name}" but you provided "${spread_sheet_name}". Please update your JSON to match what your Apps Script returns, or update your Apps Script to return "${spread_sheet_name}".`
+            });
+          }
+        } else {
+          // If spread_sheet_name is not in response, log a warning but continue
+          console.log('Warning: spread_sheet_name not found in Google Sheets response. Using value from request:', spread_sheet_name);
         }
 
-        // Check if data_sets_to_be_loaded matches
-        if (!Array.isArray(sheetData.data_sets_to_be_loaded) || 
-            !data_sets_to_be_loaded.every(dataset => 
-              sheetData.data_sets_to_be_loaded.includes(dataset)
-            )) {
-          return res.status(400).json({
-            message: 'Data sets do not match',
-            expected: data_sets_to_be_loaded,
-            actual: sheetData.data_sets_to_be_loaded
-          });
+        // Validate data_sets_to_be_loaded only if it exists in the response
+        // If it doesn't exist, we'll proceed with the request's data_sets_to_be_loaded
+        if (sheetData.hasOwnProperty('data_sets_to_be_loaded')) {
+          if (!Array.isArray(sheetData.data_sets_to_be_loaded) || 
+              !data_sets_to_be_loaded.every(dataset => 
+                sheetData.data_sets_to_be_loaded.includes(dataset)
+              )) {
+            return res.status(400).json({
+              message: 'Data sets do not match',
+              expected: data_sets_to_be_loaded,
+              actual: sheetData.data_sets_to_be_loaded
+            });
+          }
+        } else {
+          // If data_sets_to_be_loaded is not in response, log a warning but continue
+          console.log('Warning: data_sets_to_be_loaded not found in Google Sheets response. Using value from request:', data_sets_to_be_loaded);
+        }
+
+        // Validate that this is actually joiners data, not candidate reports data
+        // Candidate reports have learningReport, attendanceReport, etc.
+        // Joiners should have date_of_joining, candidate_name, phone_number, etc.
+        if (sheetData.data && Array.isArray(sheetData.data) && sheetData.data.length > 0) {
+          const firstRecord = sheetData.data[0];
+          const hasCandidateReportsStructure = firstRecord.hasOwnProperty('learningReport') || 
+                                               firstRecord.hasOwnProperty('attendanceReport') ||
+                                               firstRecord.hasOwnProperty('groomingReport');
+          const hasJoinersStructure = firstRecord.hasOwnProperty('date_of_joining') || 
+                                      firstRecord.hasOwnProperty('candidate_name') ||
+                                      firstRecord.hasOwnProperty('phone_number');
+          
+          if (hasCandidateReportsStructure && !hasJoinersStructure) {
+            return res.status(400).json({
+              message: 'Wrong data type detected. This appears to be Candidate Reports data, not Joiners data.',
+              hint: 'Please check your Google Sheet URL. For Joiners upload, use the correct Google Sheet that contains joiner information (date_of_joining, candidate_name, phone_number, etc.), not candidate reports data.',
+              detected_structure: 'Candidate Reports (has learningReport/attendanceReport/groomingReport)',
+              expected_structure: 'Joiners (should have date_of_joining, candidate_name, phone_number, etc.)',
+              suggestion: 'Verify that VITE_GOOGLE_SHEET_URL points to the Joiners Google Sheet, not the Candidate Reports sheet.'
+            });
+          }
         }
 
         // Workaround: Fix phone_number if it's null
@@ -251,6 +295,10 @@ const bulkUploadJoiners = async (req, res) => {
       }
     });
 
+    // Track emails and author_ids within the current batch to detect duplicates
+    const batchEmailsMap = new Map(); // Track email -> row index
+    const batchAuthorIdsMap = new Map(); // Track author_id -> row index
+    
     // Second pass: process each joiner with batch-checked duplicates
     for (let i = 0; i < joiners_data.length; i++) {
       try {
@@ -260,6 +308,15 @@ const bulkUploadJoiners = async (req, res) => {
         const nullIfEmpty = (value) => {
           if (value === '' || value === null || value === undefined) return null;
           return value;
+        };
+        
+        // Helper function to safely trim values (converts to string first)
+        const safeTrim = (value) => {
+          if (value === null || value === undefined || value === '') return null;
+          // Convert to string if it's not already
+          const strValue = typeof value === 'string' ? value : String(value);
+          const trimmed = strValue.trim();
+          return trimmed === '' ? null : trimmed;
         };
         
         // Helper function to validate UUID format
@@ -298,6 +355,18 @@ const bulkUploadJoiners = async (req, res) => {
         // Clean and normalize email
         const email = (joinerData.candidate_personal_mail_id || '').toString().trim().toLowerCase();
         
+        // Check for duplicate email within the same batch
+        if (email && batchEmailsMap.has(email)) {
+          const duplicateRowIndex = batchEmailsMap.get(email);
+          errors.push(`Row ${i + 1}: Duplicate email "${email}" found in this batch (also in Row ${duplicateRowIndex + 1}). Only the first occurrence will be processed.`);
+          continue;
+        }
+        
+        // Track this email in the batch
+        if (email) {
+          batchEmailsMap.set(email, i);
+        }
+        
         // Map the data to our schema based on your exact data structure
         const mappedData = {
           // Required fields with proper fallbacks
@@ -309,27 +378,41 @@ const bulkUploadJoiners = async (req, res) => {
           joiningDate: joinerData.date_of_joining ? new Date(joinerData.date_of_joining) : new Date(),
           
           // Optional fields with proper null handling
-          candidate_name: nullIfEmpty(joinerData.candidate_name)?.trim(),
+          candidate_name: safeTrim(joinerData.candidate_name),
           candidate_personal_mail_id: email,
+          Company_Maill_ID: safeTrim(joinerData.Company_Maill_ID || joinerData.company_maill_id || joinerData.companyMailId)?.toLowerCase() || null,
           phone_number: null, // Will be set after phone validation
-          top_department_name_as_per_darwinbox: nullIfEmpty(joinerData.top_department_name_as_per_darwinbox)?.trim(),
-          department_name_as_per_darwinbox: nullIfEmpty(joinerData.department_name_as_per_darwinbox)?.trim(),
+          // New field names (handle both with dot and underscore, and case variations)
+          Have_M_Tech_PC: safeTrim(
+            joinerData['Have_M.Tech_PC'] || joinerData['Have_M_Tech_PC'] || joinerData.Have_M_Tech_PC ||
+            joinerData['have_m.tech_pc'] || joinerData['have_m_tech_pc'] || joinerData.have_m_tech_pc ||
+            joinerData['Have_M.tech_PC'] || joinerData['have_M.tech_PC'] || joinerData['Have_m.Tech_pc']
+          ),
+          Have_M_Tech_OD: safeTrim(
+            joinerData['Have_M.Tech_OD'] || joinerData['Have_M_Tech_OD'] || joinerData.Have_M_Tech_OD ||
+            joinerData['have_m.tech_od'] || joinerData['have_m_tech_od'] || joinerData.have_m_tech_od ||
+            joinerData['Have_M.tech_OD'] || joinerData['have_M.tech_OD'] || joinerData['Have_m.Tech_od']
+          ),
+          Home_State: safeTrim(joinerData.Home_State || joinerData.home_state || joinerData.homeState),
+          Year_of_Passout: safeTrim(joinerData.Year_of_Passout || joinerData.year_of_passout || joinerData.yearOfPassout),
+          Manager: safeTrim(joinerData.Manager || joinerData.manager),
+          Specialization: safeTrim(joinerData.Specialization || joinerData.specialization),
           date_of_joining: joinerData.date_of_joining ? new Date(joinerData.date_of_joining) : null,
-          joining_status: nullIfEmpty(joinerData.joining_status)?.toLowerCase().trim() || 'pending',
-          role_type: nullIfEmpty(joinerData.role_type)?.trim(),
-          role_assign: (nullIfEmpty(joinerData.role_assign)?.trim() || 'OTHER').toUpperCase(),
-          qualification: nullIfEmpty(joinerData.qualification)?.trim(),
+          joining_status: safeTrim(joinerData.joining_status)?.toLowerCase() || 'pending',
+          role_type: safeTrim(joinerData.role_type),
+          role_assign: (safeTrim(joinerData.role_assign) || 'OTHER').toUpperCase(),
+          qualification: safeTrim(joinerData.qualification),
           author_id: author_id, // Generated UUID
-          employeeId: nullIfEmpty(joinerData.employee_id)?.trim(),
-          genre: nullIfEmpty(joinerData.genre) ? 
-            nullIfEmpty(joinerData.genre).trim().charAt(0).toUpperCase() + nullIfEmpty(joinerData.genre).trim().slice(1).toLowerCase() : 
+          employeeId: safeTrim(joinerData.employee_id),
+          genre: safeTrim(joinerData.genre) ? 
+            safeTrim(joinerData.genre).charAt(0).toUpperCase() + safeTrim(joinerData.genre).slice(1).toLowerCase() : 
             null,
           status: 'pending',
-          accountCreated: false,
-          accountCreatedAt: null,
-          createdBy: req.user?.id ? new mongoose.Types.ObjectId(req.user.id) : null,
-          
-          // Onboarding checklist
+          // Map new field names to old internal fields
+          accountCreated: false, // Keep default
+          accountCreatedAt: safeTrim(joinerData.Year_of_Passout) ? new Date(joinerData.Year_of_Passout) : null,
+          createdBy: safeTrim(joinerData.Manager) || (req.user?.id ? new mongoose.Types.ObjectId(req.user.id) : null),
+          // Onboarding checklist (keep default structure)
           onboardingChecklist: {
             welcomeEmailSent: false,
             credentialsGenerated: false,
@@ -339,19 +422,8 @@ const bulkUploadJoiners = async (req, res) => {
           }
         };
         
-        // Set department - must be one of the enum values
-        const deptValue = nullIfEmpty(joinerData.top_department_name_as_per_darwinbox)?.trim();
-        if (deptValue) {
-          // Try to match department name to enum values
-          const deptUpper = deptValue.toUpperCase();
-          if (['IT', 'HR', 'FINANCE', 'SDM', 'SDI', 'OTHERS'].includes(deptUpper)) {
-            mappedData.department = deptUpper;
-          } else {
-            mappedData.department = 'OTHERS';
-          }
-        } else {
-          mappedData.department = 'OTHERS';
-        }
+        // Set department - default to 'OTHERS' (no longer using top_department_name_as_per_darwinbox)
+        mappedData.department = 'OTHERS';
 
             // Debug: Log the date being processed
             // // Validate required fields based on your Google Sheet structure
@@ -461,12 +533,23 @@ const bulkUploadJoiners = async (req, res) => {
         
         // Then check by author_id (only if we're using a provided one, not a newly generated one)
         if (providedAuthorId && isValidUUID(providedAuthorId)) {
+          // Check for duplicate author_id within the same batch
+          if (batchAuthorIdsMap.has(mappedData.author_id)) {
+            const duplicateRowIndex = batchAuthorIdsMap.get(mappedData.author_id);
+            errors.push(`Row ${i + 1}: Duplicate author_id "${mappedData.author_id}" found in this batch (also in Row ${duplicateRowIndex + 1}). Only the first occurrence will be processed.`);
+            continue;
+          }
+          
+          // Check against existing database records
           const existingJoinerByAuthorId = existingAuthorIdsMap.get(mappedData.author_id);
           
           if (existingJoinerByAuthorId) {
-            errors.push(`Row ${i + 1}: Joiner with author_id ${mappedData.author_id} already exists (email: ${existingJoinerByAuthorId.candidate_personal_mail_id || existingJoinerByAuthorId.email || 'N/A'})`);
+            errors.push(`Row ${i + 1}: Joiner with author_id ${mappedData.author_id} already exists in database (email: ${existingJoinerByAuthorId.candidate_personal_mail_id || existingJoinerByAuthorId.email || 'N/A'})`);
             continue;
           }
+          
+          // Track this author_id in the batch
+          batchAuthorIdsMap.set(mappedData.author_id, i);
         }
 
         processedJoiners.push(mappedData);
@@ -511,16 +594,29 @@ const bulkUploadJoiners = async (req, res) => {
     } catch (dbError) {
       // Handle bulk write errors
       if (dbError.name === 'BulkWriteError' && dbError.writeErrors) {
-        const writeErrors = dbError.writeErrors.map(err => ({
-          index: err.index,
-          error: err.errmsg || err.err.message,
-          data: processedJoiners[err.index]
-        }));
+        const writeErrors = dbError.writeErrors.map(err => {
+          const originalRowIndex = err.index;
+          const originalData = joiners_data[originalRowIndex];
+          return {
+            row: originalRowIndex + 1,
+            index: err.index,
+            error: err.errmsg || err.err.message,
+            errorCode: err.err.code,
+            email: originalData?.candidate_personal_mail_id || 'N/A',
+            candidate_name: originalData?.candidate_name || 'N/A',
+            details: `Row ${originalRowIndex + 1}: ${err.errmsg || err.err.message}`
+          };
+        });
+        
+        // Calculate how many were successfully inserted
+        const insertedCount = dbError.result?.insertedCount || 0;
+        const failedCount = writeErrors.length;
         
         return res.status(500).json({
-          message: 'Database insertion failed',
-          insertedCount: dbError.result?.insertedCount || 0,
-          errorCount: writeErrors.length,
+          message: `Database insertion partially failed. ${insertedCount} inserted, ${failedCount} failed.`,
+          insertedCount: insertedCount,
+          errorCount: failedCount,
+          totalCount: joiners_data.length,
           errors: writeErrors,
           errorName: dbError.name,
           errorCode: dbError.code
@@ -539,15 +635,24 @@ const bulkUploadJoiners = async (req, res) => {
 
     // Return success even if there were some validation errors (partial success)
     const statusCode = hasErrors ? 200 : 201;
+    const skippedCount = joiners_data.length - createdJoiners.length;
+    
     res.status(statusCode).json({
       message: hasErrors 
-        ? `Bulk upload completed with ${createdJoiners.length} successful and ${errors.length} errors`
-        : 'Bulk upload successful',
+        ? `Bulk upload completed: ${createdJoiners.length} successful, ${errors.length} skipped/errors out of ${joiners_data.length} total`
+        : `Bulk upload successful: All ${createdJoiners.length} joiners uploaded`,
       createdCount: createdJoiners.length,
       totalCount: joiners_data.length,
+      skippedCount: skippedCount,
       errorCount: errors.length,
       errors: hasErrors ? errors : undefined,
-      joiners: createdJoiners
+      joiners: createdJoiners,
+      summary: {
+        total: joiners_data.length,
+        successful: createdJoiners.length,
+        skipped: skippedCount,
+        errors: errors.length
+      }
     });
 
   } catch (error) {

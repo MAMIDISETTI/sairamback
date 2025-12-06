@@ -124,11 +124,72 @@ const bulkUploadCandidateReports = async (req, res) => {
         
         // Check if data is already combined by author_id
         if (sheetData.success && sheetData.data && Array.isArray(sheetData.data)) {
-          extractedData = sheetData.data;
+          // Normalize interactions/interactionsReport fields for pre-combined data
+          extractedData = sheetData.data.map(item => {
+            // Check for interactions data in various possible key names
+            let interactionsData = item.interactionsReport || item.interactions || item.Interactions || null;
+            
+            // Ensure interactionsReport is always an array (even if empty)
+            if (!interactionsData) {
+              item.interactionsReport = [];
+            } else if (!Array.isArray(interactionsData)) {
+              // If it's not an array, convert it to an array
+              item.interactionsReport = [interactionsData];
+            } else {
+              item.interactionsReport = interactionsData;
+            }
+            
+            // Also add an 'interactions' field for frontend compatibility
+            if (!item.interactions) {
+              item.interactions = Array.isArray(item.interactionsReport) ? item.interactionsReport : [];
+            } else if (!Array.isArray(item.interactions)) {
+              // If interactions exists but is not an array, convert it
+              item.interactions = [item.interactions];
+            }
+            return item;
+          });
         } else if (Array.isArray(sheetData)) {
-          extractedData = sheetData;
+          // Normalize interactions/interactionsReport fields for direct array data
+          extractedData = sheetData.map(item => {
+            // Check for interactions data in various possible key names
+            let interactionsData = item.interactionsReport || item.interactions || item.Interactions || null;
+            
+            if (!interactionsData) {
+              item.interactionsReport = [];
+            } else if (!Array.isArray(interactionsData)) {
+              item.interactionsReport = [interactionsData];
+            } else {
+              item.interactionsReport = interactionsData;
+            }
+            
+            if (!item.interactions) {
+              item.interactions = Array.isArray(item.interactionsReport) ? item.interactionsReport : [];
+            } else if (!Array.isArray(item.interactions)) {
+              item.interactions = [item.interactions];
+            }
+            return item;
+          });
         } else if (sheetData.data && Array.isArray(sheetData.data)) {
-          extractedData = sheetData.data;
+          // Normalize interactions/interactionsReport fields for nested data
+          extractedData = sheetData.data.map(item => {
+            // Check for interactions data in various possible key names
+            let interactionsData = item.interactionsReport || item.interactions || item.Interactions || null;
+            
+            if (!interactionsData) {
+              item.interactionsReport = [];
+            } else if (!Array.isArray(interactionsData)) {
+              item.interactionsReport = [interactionsData];
+            } else {
+              item.interactionsReport = interactionsData;
+            }
+            
+            if (!item.interactions) {
+              item.interactions = Array.isArray(item.interactionsReport) ? item.interactionsReport : [];
+            } else if (!Array.isArray(item.interactions)) {
+              item.interactions = [item.interactions];
+            }
+            return item;
+          });
         } else {
           // If data is organized by sub-sheet names, combine them
           const combinedData = {};
@@ -190,9 +251,46 @@ const bulkUploadCandidateReports = async (req, res) => {
               }
             });
           }
+
+          // Interactions Report sub-sheet
+          // New sub-sheet in candidateuploaddata Google Sheet named "Interactions"
+          // Each row should have at least an author_id column
+          // Handle both "Interactions" and "interactions" (case-insensitive)
+          // Multiple interactions can belong to the same author_id, so we need to accumulate them into an array
+          const interactionsKey = sheetData['Interactions'] ? 'Interactions' : (sheetData['interactions'] ? 'interactions' : null);
+          if (interactionsKey && Array.isArray(sheetData[interactionsKey])) {
+            sheetData[interactionsKey].forEach(item => {
+              const authorId = item.author_id || item.authorId;
+              if (authorId) {
+                if (!combinedData[authorId]) {
+                  combinedData[authorId] = { author_id: authorId };
+                }
+                // Initialize interactionsReport as an array if it doesn't exist
+                if (!combinedData[authorId].interactionsReport) {
+                  combinedData[authorId].interactionsReport = [];
+                }
+                // Ensure it's an array (in case it was set as an object previously)
+                if (!Array.isArray(combinedData[authorId].interactionsReport)) {
+                  combinedData[authorId].interactionsReport = [combinedData[authorId].interactionsReport];
+                }
+                // Add the new interaction to the array
+                combinedData[authorId].interactionsReport.push(item);
+              }
+            });
+          }
           
-          // Convert combined data object to array
-          extractedData = Object.values(combinedData);
+          // Convert combined data object to array and ensure interactions/interactionsReport fields exist
+          extractedData = Object.values(combinedData).map(item => {
+            // Ensure interactionsReport is always an array (even if empty)
+            if (!item.interactionsReport) {
+              item.interactionsReport = [];
+            }
+            // Also add an 'interactions' field for frontend compatibility
+            if (!item.interactions) {
+              item.interactions = Array.isArray(item.interactionsReport) ? item.interactionsReport : [];
+            }
+            return item;
+          });
         }
         
         reportsData = extractedData;
@@ -346,7 +444,7 @@ const bulkUploadCandidateReports = async (req, res) => {
         let learningReport = null;
         let attendanceReport = null;
         let groomingReport = null;
-        const culturalReport = reportData.culturalReport || reportData.interactionsReport || null;
+        let interactionsReport = null;
 
         // Only include learningReport if any learning sub-sheet is in the filter
         const shouldProcessLearning = !sheetsToProcess.size || 
@@ -434,6 +532,17 @@ const bulkUploadCandidateReports = async (req, res) => {
           groomingReport = reportData.groomingReport;
         }
 
+        // Only include interactionsReport if Interactions is in the filter (handle both "Interactions" and "interactions")
+        const shouldProcessInteractions = !sheetsToProcess.size || 
+          sheetsToProcess.has('Interactions') || sheetsToProcess.has('interactions');
+        if (shouldProcessInteractions) {
+          // Check for interactionsReport in reportData (from the combined data structure)
+          const reportInteractions = reportData.interactionsReport || reportData.culturalReport || null;
+          if (reportInteractions && (Array.isArray(reportInteractions) ? reportInteractions.length > 0 : Object.keys(reportInteractions).length > 0)) {
+            interactionsReport = reportInteractions;
+          }
+        }
+
         // Prepare Learning Report for bulk operation
         if (learningReport && Object.keys(learningReport).length > 0) {
           try {
@@ -519,21 +628,21 @@ const bulkUploadCandidateReports = async (req, res) => {
           }
         }
 
-        // Prepare Cultural Report for bulk operation (stored in InteractionsReport collection)
-        if (culturalReport && (Array.isArray(culturalReport) ? culturalReport.length > 0 : Object.keys(culturalReport).length > 0)) {
+        // Prepare Interactions Report for bulk operation (stored in InteractionsReport collection)
+        if (interactionsReport && (Array.isArray(interactionsReport) ? interactionsReport.length > 0 : Object.keys(interactionsReport).length > 0)) {
           try {
             const exists = existingInteractionsMap.has(authorId);
             if (exists) {
               interactionsReportsToUpdate.push({
                 author_id: authorId,
-                reportData: culturalReport,
+                reportData: interactionsReport,
                 user: user._id || null
               });
             } else {
               interactionsReportsToCreate.push({
                 author_id: authorId,
                 user: user._id || null,
-                reportData: culturalReport,
+                reportData: interactionsReport,
                 uploadedBy: req.user.id
               });
             }
@@ -812,14 +921,20 @@ const getCandidatePerformance = async (req, res) => {
       employeeId: finalEmployeeId || null,
       dateOfJoining: user.joiningDate || user.date_of_joining || user.createdAt || null,
       joiningDate: user.joiningDate || user.date_of_joining || user.createdAt || null,
-      state: user.state || null,
+      // Use new field names from User collection
+      state: user.Home_State || user.state || null,
+      Home_State: user.Home_State || null,
       qualification: user.qualification || null,
       highestQualification: user.qualification || null,
-      specialization: user.specialization || null,
-      haveMTechPC: user.haveMTechPC || null,
-      haveMTechOD: user.haveMTechOD || null,
-      yearOfPassout: user.yearOfPassout || user.yearOfPassing || null,
-      yearOfPassing: user.yearOfPassout || user.yearOfPassing || null,
+      specialization: user.Specialization || user.specialization || null,
+      Specialization: user.Specialization || null,
+      haveMTechPC: user.Have_M_Tech_PC || user.haveMTechPC || null,
+      Have_M_Tech_PC: user.Have_M_Tech_PC || null,
+      haveMTechOD: user.Have_M_Tech_OD || user.haveMTechOD || null,
+      Have_M_Tech_OD: user.Have_M_Tech_OD || null,
+      yearOfPassout: user.Year_of_Passout || user.yearOfPassout || user.yearOfPassing || null,
+      Year_of_Passout: user.Year_of_Passout || null,
+      yearOfPassing: user.Year_of_Passout || user.yearOfPassout || user.yearOfPassing || null,
       department: user.department || null,
       role: user.role || null,
       isActive: user.isActive !== undefined ? user.isActive : true
@@ -839,6 +954,268 @@ const getCandidatePerformance = async (req, res) => {
       .limit(1)
       .lean();
     const attendanceReport = attendanceReportDoc && attendanceReportDoc.length > 0 ? attendanceReportDoc[0] : null;
+
+    // Calculate summary attendance data
+    let attendanceSummary = {
+      joinedOn: personalDetails.joiningDate || personalDetails.dateOfJoining || null,
+      workingDays: 0,
+      attended: 0,
+      leaves: 0,
+      attendance: null
+    };
+    
+    if (attendanceReport && attendanceReport.reportData) {
+      const { startDate, endDate } = req.query;
+      const reportData = attendanceReport.reportData;
+      
+      // Helper to find value by multiple variations (case-insensitive)
+      const findAttendanceValue = (obj, variations) => {
+        if (!obj || typeof obj !== 'object') return null;
+        
+        for (const variation of variations) {
+          if (obj[variation] !== undefined && obj[variation] !== null) {
+            return obj[variation];
+          }
+        }
+        
+        const lowerVariations = variations.map(v => v.toLowerCase().trim());
+        for (const key in obj) {
+          const lowerKey = key.toLowerCase().trim();
+          if (lowerVariations.includes(lowerKey) && obj[key] !== null && obj[key] !== undefined) {
+            return obj[key];
+          }
+        }
+        
+        return null;
+      };
+
+      const totalWorkingDaysObj = findAttendanceValue(reportData, [
+        'Total Working Days',
+        'total working days',
+        'Total working days',
+        'totalWorkingDays',
+        'workingDays',
+        'Working Days'
+      ]) || {};
+      
+      const daysAttendedObj = findAttendanceValue(reportData, [
+        'No of days attended',
+        'No Of Days Attended',
+        'No of Days Attended',
+        'daysAttended',
+        'noOfDaysAttended',
+        'Days Attended'
+      ]) || {};
+      
+      const leavesTakenObj = findAttendanceValue(reportData, [
+        'No of leaves taken',
+        'No Of Leaves Taken',
+        'No of Leaves Taken',
+        'No of leave taken',
+        'No Of Leave Taken',
+        'No of Leave Taken',
+        'leavesTaken',
+        'noOfLeavesTaken',
+        'Leaves Taken',
+        'Leaves',
+        'Leave',
+        'leaves',
+        'leave',
+        'No of Leaves',
+        'No Of Leaves',
+        'Number of Leaves',
+        'Number Of Leaves',
+        'Total Leaves',
+        'Total leaves'
+      ]) || {};
+
+      // Month mapping
+      const monthNameToNumber = {
+        "JAN'25": '1', "FEB'25": '2', "MAR'25": '3', "APR'25": '4',
+        "MAY'25": '5', "JUN'25": '6', "JULY'25": '7', "AUG'25": '8',
+        "SEP'25": '9', "OCT'25": '10', "NOV'25": '11', "DEC'25": '12'
+      };
+
+      const monthNumberToName = {
+        '1': "JAN'25", '2': "FEB'25", '3': "MAR'25", '4': "APR'25",
+        '5': "MAY'25", '6': "JUN'25", '7': "JULY'25", '8': "AUG'25",
+        '9': "SEP'25", '10': "OCT'25", '11': "NOV'25", '12': "DEC'25"
+      };
+
+      // Helper to get numeric value
+      const getNumericValue = (obj, monthKey) => {
+        if (!obj || typeof obj !== 'object') return 0;
+        
+        let val = obj[monthKey];
+        if ((val === undefined || val === null) && monthNameToNumber[monthKey]) {
+          const monthNum = monthNameToNumber[monthKey];
+          val = obj[monthNum];
+        }
+        if ((val === undefined || val === null) && monthNumberToName[monthKey]) {
+          const monthName = monthNumberToName[monthKey];
+          val = obj[monthName];
+        }
+        
+        if (val === null || val === undefined || val === '') return 0;
+        const num = Number(val);
+        return isNaN(num) ? 0 : num;
+      };
+
+      // Helper to check if a month is within date range
+      const isMonthInRange = (monthKey, startDateFilter, endDateFilter) => {
+        if (!startDateFilter || !endDateFilter) return true;
+        
+        const monthOrder = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JULY', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+        const monthMatch = monthKey.match(/([A-Z]+)'(\d{2})/);
+        if (monthMatch) {
+          const monthAbbr = monthMatch[1];
+          const year = '20' + monthMatch[2];
+          const monthIndex = monthOrder.indexOf(monthAbbr);
+          if (monthIndex !== -1) {
+            const monthStart = new Date(parseInt(year), monthIndex, 1);
+            const monthEnd = new Date(parseInt(year), monthIndex + 1, 0);
+            monthEnd.setHours(23, 59, 59, 999);
+            
+            const start = new Date(startDateFilter);
+            start.setHours(0, 0, 0, 0);
+            const end = new Date(endDateFilter);
+            end.setHours(23, 59, 59, 999);
+            
+            // Check if month overlaps with date range
+            return (monthStart <= end && monthEnd >= start);
+          }
+        }
+        return true;
+      };
+
+      // Helper to normalize month key to standard format (e.g., "MAY'25")
+      const normalizeMonthKey = (key) => {
+        if (!key) return null;
+        const keyStr = String(key);
+        
+        // If it's already in "MAY'25" format, return as is
+        if (keyStr.match(/^[A-Z]+'\d{2}$/)) {
+          return keyStr;
+        }
+        
+        // If it's a number (1-12), convert to formatted name
+        if (monthNumberToName[keyStr]) {
+          return monthNumberToName[keyStr];
+        }
+        
+        // If it's in "November Month" format, try to convert
+        const monthNameToFormatted = {
+          "January Month": "JAN'25", "February Month": "FEB'25", "March Month": "MAR'25", "April Month": "APR'25",
+          "May Month": "MAY'25", "June Month": "JUN'25", "July Month": "JULY'25", "August Month": "AUG'25",
+          "September Month": "SEP'25", "October Month": "OCT'25", "November Month": "NOV'25", "December Month": "DEC'25"
+        };
+        if (monthNameToFormatted[keyStr]) {
+          return monthNameToFormatted[keyStr];
+        }
+        
+        return keyStr; // Return original if can't normalize
+      };
+
+      // Create a map from normalized keys to all possible original keys
+      const normalizedToOriginalKeys = new Map();
+      
+      // Collect from all three objects and create mapping
+      [...Object.keys(totalWorkingDaysObj), ...Object.keys(daysAttendedObj), ...Object.keys(leavesTakenObj)].forEach(originalKey => {
+        const normalized = normalizeMonthKey(originalKey);
+        if (normalized) {
+          if (!normalizedToOriginalKeys.has(normalized)) {
+            normalizedToOriginalKeys.set(normalized, []);
+          }
+          normalizedToOriginalKeys.get(normalized).push(originalKey);
+        }
+      });
+
+      // Get all unique normalized month keys
+      const allMonthKeysSet = Array.from(normalizedToOriginalKeys.keys());
+
+      // Filter months by date range if provided
+      let filteredMonthKeys = allMonthKeysSet;
+      if (startDate && endDate) {
+        filteredMonthKeys = filteredMonthKeys.filter(normalizedKey => {
+          return isMonthInRange(normalizedKey, startDate, endDate);
+        });
+      }
+
+      // Calculate totals - iterate through normalized keys and use original keys for lookup
+      let totalWorkingDays = 0;
+      let totalAttended = 0;
+      let totalLeaves = 0;
+
+      filteredMonthKeys.forEach(normalizedMonthKey => {
+        // Get all possible original keys for this normalized key
+        const originalKeys = normalizedToOriginalKeys.get(normalizedMonthKey) || [];
+        
+        // For each normalized key, check all possible original key formats in the data
+        let workingDays = null;
+        let attended = null;
+        let leaves = null;
+        
+        // Try all original keys that map to this normalized key
+        for (const originalKey of originalKeys) {
+          // Try working days
+          if (workingDays === null && totalWorkingDaysObj[originalKey] !== undefined && totalWorkingDaysObj[originalKey] !== null && totalWorkingDaysObj[originalKey] !== '') {
+            const val = Number(totalWorkingDaysObj[originalKey]);
+            if (!isNaN(val)) {
+              workingDays = val;
+            }
+          }
+          // Try attended
+          if (attended === null && daysAttendedObj[originalKey] !== undefined && daysAttendedObj[originalKey] !== null && daysAttendedObj[originalKey] !== '') {
+            const val = Number(daysAttendedObj[originalKey]);
+            if (!isNaN(val)) {
+              attended = val;
+            }
+          }
+          // Try leaves
+          if (leaves === null && leavesTakenObj[originalKey] !== undefined && leavesTakenObj[originalKey] !== null && leavesTakenObj[originalKey] !== '') {
+            const val = Number(leavesTakenObj[originalKey]);
+            if (!isNaN(val)) {
+              leaves = val;
+            }
+          }
+        }
+        
+        // Use 0 if value is null or NaN
+        const finalWorkingDays = (workingDays !== null && !isNaN(workingDays)) ? workingDays : 0;
+        const finalAttended = (attended !== null && !isNaN(attended)) ? attended : 0;
+        
+        // Calculate leaves: prioritize calculation from workingDays - attended when both are available
+        // This ensures accuracy even if explicit leaves value is missing or incorrect
+        let finalLeaves = 0;
+        if (finalWorkingDays > 0 && finalAttended >= 0) {
+          // Calculate leaves as workingDays - attended (most accurate method)
+          const calculatedLeaves = finalWorkingDays - finalAttended;
+          // Only use calculated leaves if it makes sense (non-negative and reasonable)
+          if (calculatedLeaves >= 0 && calculatedLeaves <= finalWorkingDays) {
+            finalLeaves = calculatedLeaves;
+          }
+        } else if (leaves !== null && !isNaN(leaves)) {
+          // Fallback: use explicit value only if we can't calculate it
+          finalLeaves = leaves;
+        }
+        
+        totalWorkingDays += finalWorkingDays;
+        totalAttended += finalAttended;
+        totalLeaves += finalLeaves;
+      });
+
+      // Calculate attendance percentage
+      let attendancePercentage = null;
+      if (totalWorkingDays > 0) {
+        attendancePercentage = Math.round((totalAttended / totalWorkingDays) * 100);
+        attendancePercentage = Math.min(attendancePercentage, 100);
+      }
+
+      attendanceSummary.workingDays = totalWorkingDays;
+      attendanceSummary.attended = totalAttended;
+      attendanceSummary.leaves = totalLeaves;
+      attendanceSummary.attendance = attendancePercentage !== null ? attendancePercentage : null;
+    }
 
     const groomingReportDoc = await GroomingReport.find({ author_id: authorId })
       .populate('uploadedBy', 'name email')
@@ -933,8 +1310,11 @@ const getCandidatePerformance = async (req, res) => {
         attendanceReport: attendanceReport ? {
           reportData: attendanceReport.reportData,
           uploadedAt: attendanceReport.uploadedAt,
-          uploadedBy: attendanceReport.uploadedBy
-        } : null,
+          uploadedBy: attendanceReport.uploadedBy,
+          summary: attendanceSummary
+        } : {
+          summary: attendanceSummary
+        },
         groomingReport: groomingReport ? {
           reportData: groomingReport.reportData,
           uploadedAt: groomingReport.uploadedAt,

@@ -270,7 +270,7 @@ const promoteUser = async (req, res) => {
 const deactivateUser = async (req, res) => {
   try {
     
-    const { userId, reason } = req.body;
+    const { userId, reason, category } = req.body;
     const { id: adminId } = req.user;
     
     // console.log('Extracted data:', { userId, reason, adminId });
@@ -355,7 +355,7 @@ const deactivateUser = async (req, res) => {
         },
         { runValidators: false }
       );
-      console.log('Updated User model for:', updateResult.email, 'Result:', crossUpdateResult ? 'Success' : 'Not found');
+    //  console.log('Updated User model for:', updateResult.email, 'Result:', crossUpdateResult ? 'Success' : 'Not found');
     } else {
       // User was found in User, also update UserNew model
       const crossUpdateResult = await UserNew.findOneAndUpdate(
@@ -454,7 +454,7 @@ const deactivateUser = async (req, res) => {
           deactivatedByEmail: adminEmail,
           reason: reason || updateResult.deactivationReason || 'Account deactivated by admin',
           remarks: reason || updateResult.deactivationReason || 'Account deactivated by admin',
-          category: 'other', // Default category, can be enhanced later
+          category: category || 'other',
           severity: 'low' // Default severity, can be enhanced later
         },
         
@@ -523,6 +523,16 @@ const deactivateUser = async (req, res) => {
     // - Day plans created by this user
     // - Any other content they created
 
+    // Auto-sync to Google Sheets after deactivation
+    try {
+      autoSyncToGoogleSheets('users');
+      // Also sync joiners in case the user was linked to a joiner record
+      autoSyncToGoogleSheets('joiners');
+    } catch (syncError) {
+      console.error('Error auto-syncing to Google Sheets after deactivation:', syncError);
+      // Don't fail the deactivation if sync fails
+    }
+
     res.json({
       message: 'User account deactivated and all access removed successfully',
       user: {
@@ -579,10 +589,21 @@ const reactivateUser = async (req, res) => {
 
     // Reactivate user
     user.isActive = true;
+    user.accountStatus = 'active';
     user.deactivatedAt = null;
     user.deactivatedBy = null;
     user.deactivationReason = null;
     await user.save();
+
+    // Auto-sync to Google Sheets after reactivation
+    try {
+      autoSyncToGoogleSheets('users');
+      // Also sync joiners in case the user was linked to a joiner record
+      autoSyncToGoogleSheets('joiners');
+    } catch (syncError) {
+      console.error('Error auto-syncing to Google Sheets after reactivation:', syncError);
+      // Don't fail the reactivation if sync fails
+    }
 
     res.json({
       message: 'User account reactivated successfully',
@@ -1243,6 +1264,16 @@ const reinstateUser = async (req, res) => {
       deactivatedBy: null,
       deactivationReason: null
     });
+    
+    // Auto-sync to Google Sheets after reinstatement
+    try {
+      autoSyncToGoogleSheets('users');
+      // Also sync joiners in case the user was linked to a joiner record
+      autoSyncToGoogleSheets('joiners');
+    } catch (syncError) {
+      console.error('Error auto-syncing to Google Sheets after reinstatement:', syncError);
+      // Don't fail the reinstatement if sync fails
+    }
     
     res.json({ 
       message: 'User reinstated successfully',
