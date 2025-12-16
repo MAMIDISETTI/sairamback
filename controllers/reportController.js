@@ -8,6 +8,9 @@ const LearningReport = require("../models/LearningReport");
 const AttendanceReport = require("../models/AttendanceReport");
 const GroomingReport = require("../models/GroomingReport");
 const Result = require("../models/Result");
+const CandidateReport = require("../models/CandidateReport");
+const FortnightReport = require("../models/FortnightReport");
+const WorkshopReport = require("../models/WorkshopReport");
 
 // @desc    Generate attendance report
 // @route   GET /api/reports/attendance
@@ -508,13 +511,19 @@ const convertAuditLogToCSV = (auditLog) => {
 // @access  Private (Admin)
 const getDemosReport = async (req, res) => {
   try {
-    const { period = 'weekly', type = 'all' } = req.query;
+    const { period = 'weekly', type = 'all', startDate: startDateParam, endDate: endDateParam, course, topic, unit } = req.query;
     
-    // Calculate date range based on period
+    // Calculate date range based on period or custom dates
     const now = new Date();
     let startDate, endDate;
     
-    if (period === 'weekly') {
+    // If custom date range is provided, use it
+    if (startDateParam && endDateParam) {
+      startDate = new Date(startDateParam);
+      endDate = new Date(endDateParam);
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
+    } else if (period === 'weekly') {
       // Last 7 days
       startDate = new Date(now);
       startDate.setDate(startDate.getDate() - 7);
@@ -525,77 +534,166 @@ const getDemosReport = async (req, res) => {
       endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     }
 
-    // Fetch learning reports to get demo data
-    const learningReports = await LearningReport.find({
-      'reportData.Online demo counts': { $exists: true },
-      lastUpdatedAt: { $gte: startDate, $lte: endDate }
-    })
-    .populate('user', 'name email author_id')
-    .lean();
+    // Fetch all users with demo_managements_details
+    const users = await User.find({
+      demo_managements_details: { $exists: true, $ne: [] },
+      role: 'trainee'
+    }).lean();
 
-    const onlineDemos = [];
-    const offlineDemos = [];
+    // Collect all demos
+    const allDemos = [];
+    const responseTimes = []; // For calculating median response times
 
-    learningReports.forEach(report => {
-      const reportData = report.reportData || {};
-      
-      // Extract online demo data
-      const onlineDemoCounts = reportData['Online demo counts'] || {};
-      const onlineDemoRatings = reportData['Online demo ratings Average'] || {};
-      
-      Object.keys(onlineDemoCounts).forEach(course => {
-        const count = parseFloat(onlineDemoCounts[course]) || 0;
-        const rating = parseFloat(onlineDemoRatings[course]) || 0;
-        
-        if (count > 0) {
-          onlineDemos.push({
-            traineeName: report.user?.name || 'N/A',
-            traineeId: report.user?.author_id || report.author_id,
-            course: course,
-            count: count,
-            rating: rating,
-            date: report.lastUpdatedAt,
-            status: 'approved' // Default status
-          });
-        }
-      });
+    users.forEach(user => {
+      if (user.demo_managements_details && Array.isArray(user.demo_managements_details)) {
+        user.demo_managements_details.forEach(demo => {
+          if (!demo.uploadedAt) return;
+          
+          const demoDate = new Date(demo.uploadedAt);
+          if (demoDate >= startDate && demoDate <= endDate) {
+            // Apply filters
+            if (course && demo.courseTag && !demo.courseTag.toLowerCase().includes(course.toLowerCase())) {
+              return;
+            }
+            if (topic && demo.title && !demo.title.toLowerCase().includes(topic.toLowerCase())) {
+              return;
+            }
+            if (unit && demo.courseTag && !demo.courseTag.toLowerCase().includes(unit.toLowerCase())) {
+              return;
+            }
 
-      // Extract offline demo data
-      const offlineDemoCounts = reportData['Offline demo counts'] || {};
-      const offlineDemoRatings = reportData['Offline demo ratings Average'] || {};
-      
-      Object.keys(offlineDemoCounts).forEach(course => {
-        const count = parseFloat(offlineDemoCounts[course]) || 0;
-        const rating = parseFloat(offlineDemoRatings[course]) || 0;
-        
-        if (count > 0) {
-          offlineDemos.push({
-            traineeName: report.user?.name || 'N/A',
-            traineeId: report.user?.author_id || report.author_id,
-            course: course,
-            count: count,
-            rating: rating,
-            date: report.lastUpdatedAt,
-            status: 'approved' // Default status
-          });
-        }
-      });
+            const demoObj = {
+              id: demo.id || demo._id?.toString() || Date.now().toString(),
+              traineeName: user.name || 'N/A',
+              traineeId: user.author_id,
+              course: demo.courseTag || 'N/A',
+              title: demo.title || 'Untitled',
+              type: demo.type || 'online',
+              status: demo.status || 'pending',
+              rating: parseFloat(demo.rating) || 0,
+              uploadedAt: demo.uploadedAt,
+              reviewedAt: demo.reviewedAt || null,
+              masterTrainerReviewedAt: demo.masterTrainerReviewedAt || null,
+              trainerStatus: demo.trainerStatus || null,
+              masterTrainerStatus: demo.masterTrainerStatus || null
+            };
+
+            allDemos.push(demoObj);
+
+            // Calculate response times
+            if (demo.reviewedAt) {
+              const uploadTime = new Date(demo.uploadedAt);
+              const reviewTime = new Date(demo.reviewedAt);
+              const hoursDiff = (reviewTime - uploadTime) / (1000 * 60 * 60);
+              if (hoursDiff > 0) {
+                responseTimes.push({
+                  approved: hoursDiff,
+                  commented: hoursDiff
+                });
+              }
+            }
+          }
+        });
+      }
     });
+
+    // Separate online and offline demos
+    const onlineDemos = allDemos.filter(d => d.type === 'online' || d.type === 'online_demo');
+    const offlineDemos = allDemos.filter(d => d.type === 'offline' || d.type === 'offline_demo');
+
+    // Calculate statistics for all demos
+    const totalDemos = allDemos.length;
+    const totalOnlineDemos = onlineDemos.length;
+    const totalOfflineDemos = offlineDemos.length;
+    
+    const approvedDemos = allDemos.filter(d => 
+      d.status === 'approved' || 
+      d.status === 'review_complete' || 
+      (d.trainerStatus === 'approved' && d.masterTrainerStatus === 'approved')
+    ).length;
+    
+    const approvedOnlineDemos = onlineDemos.filter(d => 
+      d.status === 'approved' || 
+      d.status === 'review_complete' || 
+      (d.trainerStatus === 'approved' && d.masterTrainerStatus === 'approved')
+    ).length;
+    
+    const approvedOfflineDemos = offlineDemos.filter(d => 
+      d.status === 'approved' || 
+      d.status === 'review_complete' || 
+      (d.trainerStatus === 'approved' && d.masterTrainerStatus === 'approved')
+    ).length;
+    
+    const pendingDemos = allDemos.filter(d => 
+      d.status === 'pending' || 
+      d.status === 'under_review' || 
+      (d.trainerStatus === 'approved' && d.masterTrainerStatus === 'pending')
+    ).length;
+    
+    const rejectedDemos = allDemos.filter(d => 
+      d.status === 'trainer_rejected' || 
+      d.status === 'master_trainer_rejected' || 
+      d.trainerStatus === 'rejected' || 
+      d.masterTrainerStatus === 'rejected'
+    ).length;
+    
+    const toBeReviewedDemos = allDemos.filter(d => 
+      d.status === 'pending' || 
+      d.status === 'under_review'
+    ).length;
+
+    // Calculate average rating
+    const ratedDemos = allDemos.filter(d => d.rating > 0);
+    const averageRating = ratedDemos.length > 0
+      ? ratedDemos.reduce((sum, d) => sum + d.rating, 0) / ratedDemos.length
+      : 0;
+
+    // Calculate median response times
+    const calculateMedian = (arr) => {
+      if (arr.length === 0) return 0;
+      const sorted = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
+    };
+
+    const approvedResponseTimes = responseTimes.map(r => r.approved);
+    const commentedResponseTimes = responseTimes.map(r => r.commented);
+    
+    const medianApprovedResponseTime = calculateMedian(approvedResponseTimes);
+    const medianCommentedResponseTime = calculateMedian(commentedResponseTimes);
+
+    // Calculate 90th percentile
+    const calculatePercentile = (arr, percentile) => {
+      if (arr.length === 0) return 0;
+      const sorted = [...arr].sort((a, b) => a - b);
+      const index = Math.ceil((percentile / 100) * sorted.length) - 1;
+      return sorted[Math.max(0, index)];
+    };
+
+    const percentile90Approved = calculatePercentile(approvedResponseTimes, 90);
+    const percentile90Commented = calculatePercentile(commentedResponseTimes, 90);
 
     // Group by weekly/monthly
     const weeklyOnline = onlineDemos.filter(d => {
-      const daysDiff = Math.floor((endDate - d.date) / (1000 * 60 * 60 * 24));
+      const daysDiff = Math.floor((endDate - new Date(d.uploadedAt)) / (1000 * 60 * 60 * 24));
       return daysDiff <= 7;
     });
     
     const monthlyOnline = onlineDemos;
     
     const weeklyOffline = offlineDemos.filter(d => {
-      const daysDiff = Math.floor((endDate - d.date) / (1000 * 60 * 60 * 24));
+      const daysDiff = Math.floor((endDate - new Date(d.uploadedAt)) / (1000 * 60 * 60 * 24));
       return daysDiff <= 7;
     });
     
     const monthlyOffline = offlineDemos;
+
+    // Get unique courses, topics, and units for filters
+    const uniqueCourses = [...new Set(allDemos.map(d => d.course).filter(Boolean))];
+    const uniqueTopics = [...new Set(allDemos.map(d => d.title).filter(Boolean))];
+    const uniqueUnits = [...new Set(allDemos.map(d => d.course).filter(Boolean))];
 
     res.json({
       success: true,
@@ -607,6 +705,27 @@ const getDemosReport = async (req, res) => {
         offline: {
           weekly: weeklyOffline,
           monthly: monthlyOffline
+        },
+        statistics: {
+          totalDemos,
+          totalOnlineDemos,
+          totalOfflineDemos,
+          approvedDemos,
+          approvedOnlineDemos,
+          approvedOfflineDemos,
+          pendingDemos,
+          rejectedDemos,
+          toBeReviewedDemos,
+          averageRating: parseFloat(averageRating.toFixed(2)),
+          medianApprovedResponseTime: parseFloat(medianApprovedResponseTime.toFixed(2)),
+          medianCommentedResponseTime: parseFloat(medianCommentedResponseTime.toFixed(2)),
+          percentile90Approved: parseFloat(percentile90Approved.toFixed(2)),
+          percentile90Commented: parseFloat(percentile90Commented.toFixed(2))
+        },
+        filters: {
+          courses: uniqueCourses,
+          topics: uniqueTopics,
+          units: uniqueUnits
         }
       }
     });
@@ -985,13 +1104,20 @@ const getAttendanceGroomingReport = async (req, res) => {
 // @access  Private (Admin)
 const getFortnightReport = async (req, res) => {
   try {
-    const { period = 'weekly', month, year } = req.query;
+    const { period = 'weekly', month, year, startDate: startDateParam, endDate: endDateParam } = req.query;
     
-    // Calculate date range based on period
+    // Calculate date range based on period or custom dates
     const now = new Date();
     let startDate, endDate;
     
-    if (period === 'weekly') {
+    // If custom date range is provided, use it
+    if (startDateParam && endDateParam) {
+      startDate = new Date(startDateParam);
+      endDate = new Date(endDateParam);
+      // Set time to start/end of day for proper comparison
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
+    } else if (period === 'weekly') {
       startDate = new Date(now);
       startDate.setDate(startDate.getDate() - 7);
       endDate = now;
@@ -1272,13 +1398,117 @@ const getFortnightReport = async (req, res) => {
       }))
       .sort((a, b) => b.averageRating - a.averageRating); // Sort by average rating descending
 
+    // Calculate aggregated summary for the selected date range
+    const uniqueAttemptsInRange = new Set();
+    const percentagesInRange = [];
+    let totalScoreInRange = 0;
+    
+    fortnightResults.forEach(result => {
+      if (result.author_id) {
+        uniqueAttemptsInRange.add(result.author_id);
+      }
+      const percentage = parseFloat(result.percentage) || 0;
+      if (percentage > 0) {
+        percentagesInRange.push(percentage);
+        totalScoreInRange += percentage;
+      }
+    });
+    
+    const attemptedCountInRange = uniqueAttemptsInRange.size;
+    const absenteesCountInRange = Math.max(0, eligibleCount - attemptedCountInRange);
+    const averagePercentageInRange = percentagesInRange.length > 0 
+      ? (totalScoreInRange / percentagesInRange.length) 
+      : 0;
+
+    // Calculate course-wise eligible candidates count
+    const courseWiseEligible = {};
+    const uniqueCourses = new Set();
+    
+    // Get all unique courses from fortnight results
+    fortnightResults.forEach(result => {
+      const examType = result.exam_type || 'Unknown';
+      let courseName = examType;
+      
+      const courseMatch = examType.match(/(?:fortnight\d*\s*)?(.+)/i);
+      if (courseMatch && courseMatch[1]) {
+        courseName = courseMatch[1].trim();
+      }
+      
+      courseName = courseName.replace(/fortnight\d*/gi, '').trim();
+      if (courseName && courseName !== '' && courseName !== 'Unknown') {
+        uniqueCourses.add(courseName);
+      }
+    });
+    
+    // Get all active trainees with their candidate reports
+    const activeTrainees = await User.find({ isActive: true, role: 'trainee' }).lean();
+    const candidateReports = await CandidateReport.find({}).lean();
+    
+    // Create a map of author_id to candidate report for quick lookup
+    const candidateReportMap = {};
+    candidateReports.forEach(report => {
+      if (report.author_id) {
+        candidateReportMap[report.author_id] = report;
+      }
+    });
+    
+    // For each course, count eligible candidates (those who have the course in CourseCompletion)
+    uniqueCourses.forEach(courseName => {
+      let eligibleCountForCourse = 0;
+      
+      activeTrainees.forEach(trainee => {
+        const candidateReport = candidateReportMap[trainee.author_id];
+        if (candidateReport && candidateReport.learningReport) {
+          const courseCompletion = candidateReport.learningReport.CourseCompletion || 
+                                   candidateReport.learningReport['Course Completion'] || {};
+          
+          // Helper to find course by name (case-insensitive)
+          const findValueByCourse = (obj, course) => {
+            if (!obj || typeof obj !== 'object') return null;
+            if (obj[course] !== undefined) return obj[course];
+            const courseLower = course.toLowerCase().trim();
+            const matchingKey = Object.keys(obj).find(k => k.toLowerCase().trim() === courseLower);
+            return matchingKey ? obj[matchingKey] : null;
+          };
+          
+          const courseData = findValueByCourse(courseCompletion, courseName);
+          
+          // Count as eligible if course exists in CourseCompletion (completed or in progress)
+          if (courseData && typeof courseData === 'object') {
+            const status = (courseData.status || courseData.Status || '').toLowerCase().trim();
+            // Include if completed, in progress, or just exists
+            if (status === 'completed' || status === 'done' || status === 'finished' ||
+                status === 'in progress' || status === 'inprogress' || status === 'ongoing' ||
+                status === 'working' || status === 'currently doing' || status.includes('progress') ||
+                Object.keys(courseData).length > 0) {
+              eligibleCountForCourse++;
+            }
+          }
+        }
+      });
+      
+      courseWiseEligible[courseName] = eligibleCountForCourse;
+    });
+
+    // Prepare aggregated summary
+    const aggregatedSummary = {
+      totalTraineesCount: totalTraineeCount,
+      eligibleCount: eligibleCount,
+      attemptedCount: attemptedCountInRange,
+      absenteesCount: absenteesCountInRange,
+      terminatedCount: terminatedCount,
+      averagePercentage: parseFloat(averagePercentageInRange.toFixed(2))
+    };
+
     res.json({
       success: true,
       data: {
         overallAverage: overallAverage,
         courseWise: courseWise,
         detailedReports: detailedReportArray,
-        monthlyReport: monthlyReport
+        monthlyReport: monthlyReport,
+        aggregatedSummary: aggregatedSummary,
+        courseWiseEligible: courseWiseEligible
       }
     });
 
@@ -1292,6 +1522,56 @@ const getFortnightReport = async (req, res) => {
   }
 };
 
+// @desc    Get all uploaded Fortnight Reports
+// @route   GET /api/reports/fortnight-reports
+// @access  Private (Admin)
+const getFortnightReports = async (req, res) => {
+  try {
+    const reports = await FortnightReport.find()
+      .populate('uploadedBy', 'name email')
+      .sort({ uploadedAt: -1 })
+      .lean();
+
+    res.status(200).json({
+      success: true,
+      data: reports,
+      count: reports.length
+    });
+  } catch (error) {
+    console.error('Error fetching fortnight reports:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch fortnight reports',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get all uploaded Workshop Reports
+// @route   GET /api/reports/workshop-reports
+// @access  Private (Admin)
+const getWorkshopReports = async (req, res) => {
+  try {
+    const reports = await WorkshopReport.find()
+      .populate('uploadedBy', 'name email')
+      .sort({ uploadedAt: -1 })
+      .lean();
+
+    res.status(200).json({
+      success: true,
+      data: reports,
+      count: reports.length
+    });
+  } catch (error) {
+    console.error('Error fetching workshop reports:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch workshop reports',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   generateAttendanceReport,
   generateDayPlanComplianceReport,
@@ -1300,5 +1580,7 @@ module.exports = {
   generateAuditLog,
   getDemosReport,
   getAttendanceGroomingReport,
-  getFortnightReport
+  getFortnightReport,
+  getFortnightReports,
+  getWorkshopReports
 };

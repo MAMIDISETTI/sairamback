@@ -9,6 +9,53 @@ const UserNew = require('../models/UserNew');
  */
 const getAllCandidatesPerformance = async (req, res) => {
   try {
+    // First, get ALL active trainees (with author_id) from both User and UserNew models
+    // This ensures we include all candidates, even if they don't have reports yet
+    const traineesUser = await User.find({ 
+      role: 'trainee', 
+      isActive: true 
+    })
+      .select('name email author_id employeeId isActive')
+      .lean();
+    
+    const traineesUserNew = await UserNew.find({ 
+      role: 'trainee', 
+      isActive: true 
+    })
+      .select('name email author_id employeeId isActive')
+      .lean();
+    
+    // Combine and deduplicate trainees by author_id or email
+    const allTraineesMap = new Map();
+    [...traineesUser, ...traineesUserNew].forEach(trainee => {
+      const key = (trainee.author_id || trainee.email || trainee._id.toString()).toLowerCase();
+      if (!allTraineesMap.has(key) && trainee.author_id) {
+        allTraineesMap.set(key, {
+          author_id: trainee.author_id,
+          name: trainee.name || 'N/A',
+          email: trainee.email || 'N/A',
+          employeeId: trainee.employeeId || 'N/A'
+        });
+      }
+    });
+    
+    // Initialize candidates map with ALL active trainees
+    const candidatesMap = new Map();
+    allTraineesMap.forEach((trainee, key) => {
+      candidatesMap.set(trainee.author_id, {
+        author_id: trainee.author_id,
+        name: trainee.name,
+        email: trainee.email,
+        employeeId: trainee.employeeId,
+        learningReport: {},
+        attendanceReport: {},
+        groomingReport: {},
+        examAverages: {},
+        courseCompletion: {},
+        learningPhase: null
+      });
+    });
+
     // Get all learning reports and filter by active users only
     const learningReports = await LearningReport.find({})
       .populate({
@@ -36,10 +83,7 @@ const getAllCandidatesPerformance = async (req, res) => {
       })
       .lean();
 
-    // Combine all reports by author_id
-    const candidatesMap = new Map();
-
-    // Process learning reports (only for active users)
+    // Process learning reports and merge into candidates map
     learningReports.forEach(report => {
       // Skip if user is null (filtered out by populate match) or inactive
       if (!report.user || report.user.isActive === false) {
@@ -47,25 +91,12 @@ const getAllCandidatesPerformance = async (req, res) => {
       }
       
       const authorId = report.author_id;
-      if (!candidatesMap.has(authorId)) {
-        candidatesMap.set(authorId, {
-          author_id: authorId,
-          name: report.user?.name || 'N/A',
-          email: report.user?.email || 'N/A',
-          employeeId: report.user?.employeeId || 'N/A',
-          learningReport: report.reportData || {},
-          attendanceReport: {},
-          groomingReport: {},
-          examAverages: {},
-          courseCompletion: {},
-          learningPhase: null
-        });
-      } else {
+      if (candidatesMap.has(authorId)) {
         candidatesMap.get(authorId).learningReport = report.reportData || {};
       }
     });
 
-    // Process attendance reports (only for active users)
+    // Process attendance reports and merge into candidates map
     attendanceReports.forEach(report => {
       // Skip if user is null (filtered out by populate match) or inactive
       if (!report.user || report.user.isActive === false) {
@@ -73,25 +104,12 @@ const getAllCandidatesPerformance = async (req, res) => {
       }
       
       const authorId = report.author_id;
-      if (!candidatesMap.has(authorId)) {
-        candidatesMap.set(authorId, {
-          author_id: authorId,
-          name: report.user?.name || 'N/A',
-          email: report.user?.email || 'N/A',
-          employeeId: report.user?.employeeId || 'N/A',
-          learningReport: {},
-          attendanceReport: report.reportData || {},
-          groomingReport: {},
-          examAverages: {},
-          courseCompletion: {},
-          learningPhase: null
-        });
-      } else {
+      if (candidatesMap.has(authorId)) {
         candidatesMap.get(authorId).attendanceReport = report.reportData || {};
       }
     });
 
-    // Process grooming reports (only for active users)
+    // Process grooming reports and merge into candidates map
     groomingReports.forEach(report => {
       // Skip if user is null (filtered out by populate match) or inactive
       if (!report.user || report.user.isActive === false) {
@@ -99,20 +117,7 @@ const getAllCandidatesPerformance = async (req, res) => {
       }
       
       const authorId = report.author_id;
-      if (!candidatesMap.has(authorId)) {
-        candidatesMap.set(authorId, {
-          author_id: authorId,
-          name: report.user?.name || 'N/A',
-          email: report.user?.email || 'N/A',
-          employeeId: report.user?.employeeId || 'N/A',
-          learningReport: {},
-          attendanceReport: {},
-          groomingReport: report.reportData || {},
-          examAverages: {},
-          courseCompletion: {},
-          learningPhase: null
-        });
-      } else {
+      if (candidatesMap.has(authorId)) {
         candidatesMap.get(authorId).groomingReport = report.reportData || {};
       }
     });
@@ -666,6 +671,53 @@ const getCandidatesByLearningPhase = async (req, res) => {
  * Helper function to get all candidates performance data
  */
 const getAllCandidatesPerformanceData = async () => {
+  // First, get ALL active trainees (with author_id) from both User and UserNew models
+  // This ensures we include all candidates, even if they don't have reports yet
+  const traineesUser = await User.find({ 
+    role: 'trainee', 
+    isActive: true 
+  })
+    .select('name email author_id employeeId isActive')
+    .lean();
+  
+  const traineesUserNew = await UserNew.find({ 
+    role: 'trainee', 
+    isActive: true 
+  })
+    .select('name email author_id employeeId isActive')
+    .lean();
+  
+  // Combine and deduplicate trainees by author_id or email
+  const allTraineesMap = new Map();
+  [...traineesUser, ...traineesUserNew].forEach(trainee => {
+    const key = (trainee.author_id || trainee.email || trainee._id.toString()).toLowerCase();
+    if (!allTraineesMap.has(key) && trainee.author_id) {
+      allTraineesMap.set(key, {
+        author_id: trainee.author_id,
+        name: trainee.name || 'N/A',
+        email: trainee.email || 'N/A',
+        employeeId: trainee.employeeId || 'N/A'
+      });
+    }
+  });
+  
+  // Initialize candidates map with ALL active trainees
+  const candidatesMap = new Map();
+  allTraineesMap.forEach((trainee, key) => {
+    candidatesMap.set(trainee.author_id, {
+      author_id: trainee.author_id,
+      name: trainee.name,
+      email: trainee.email,
+      employeeId: trainee.employeeId,
+      learningReport: {},
+      attendanceReport: {},
+      groomingReport: {},
+      examAverages: {},
+      courseCompletion: {},
+      learningPhase: null
+    });
+  });
+
   // Get all reports and filter by active users only
   const learningReports = await LearningReport.find({})
     .populate({
@@ -689,9 +741,7 @@ const getAllCandidatesPerformanceData = async () => {
     })
     .lean();
 
-  const candidatesMap = new Map();
-
-  // Process all reports (only for active users)
+  // Process all reports and merge into candidates map
   learningReports.forEach(report => {
     // Skip if user is null (filtered out by populate match) or inactive
     if (!report.user || report.user.isActive === false) {
@@ -699,20 +749,7 @@ const getAllCandidatesPerformanceData = async () => {
     }
     
     const authorId = report.author_id;
-    if (!candidatesMap.has(authorId)) {
-      candidatesMap.set(authorId, {
-        author_id: authorId,
-        name: report.user?.name || 'N/A',
-        email: report.user?.email || 'N/A',
-        employeeId: report.user?.employeeId || 'N/A',
-        learningReport: report.reportData || {},
-        attendanceReport: {},
-        groomingReport: {},
-        examAverages: {},
-        courseCompletion: {},
-        learningPhase: null
-      });
-    } else {
+    if (candidatesMap.has(authorId)) {
       candidatesMap.get(authorId).learningReport = report.reportData || {};
     }
   });

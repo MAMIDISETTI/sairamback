@@ -1,5 +1,5 @@
 const express = require("express");
-const { protect, masterTrainerOnly, trainerOnly, requireRoles, adminOnly } = require("../middlewares/authMiddleware");
+const { protect, masterTrainerOnly, trainerOnly, requireRoles, adminOnly, boaOnly } = require("../middlewares/authMiddleware");
 const {
   generateAttendanceReport,
   generateDayPlanComplianceReport,
@@ -8,8 +8,17 @@ const {
   generateAuditLog,
   getDemosReport,
   getAttendanceGroomingReport,
-  getFortnightReport
+  getFortnightReport,
+  getFortnightReports,
+  getWorkshopReports
 } = require("../controllers/reportController");
+const {
+  uploadFortnightReport,
+  uploadWorkshopReport,
+  uploadAttendanceReport,
+  uploadDemosReport
+} = require("../controllers/reportUploadController");
+const csvUpload = require("../middlewares/csvUploadMiddleware");
 
 const router = express.Router();
 
@@ -32,5 +41,13 @@ router.get("/audit", protect, masterTrainerOnly, generateAuditLog);
 router.get("/demos", protect, adminOnly, getDemosReport);
 router.get("/attendance-grooming", protect, adminOnly, getAttendanceGroomingReport);
 router.get("/fortnight", protect, adminOnly, getFortnightReport);
+router.get("/fortnight-reports", protect, adminOnly, getFortnightReports);
+router.get("/workshop-reports", protect, adminOnly, getWorkshopReports);
+
+// BOA CSV Upload Routes (BOA only)
+router.post("/upload/fortnight", protect, boaOnly, csvUpload.single('csvFile'), uploadFortnightReport);
+router.post("/upload/workshop", protect, boaOnly, csvUpload.single('csvFile'), uploadWorkshopReport);
+router.post("/upload/attendance", protect, boaOnly, csvUpload.single('csvFile'), uploadAttendanceReport);
+router.post("/upload/demos", protect, boaOnly, csvUpload.single('csvFile'), uploadDemosReport);
 
 module.exports = router;

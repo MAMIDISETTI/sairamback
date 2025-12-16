@@ -43,14 +43,16 @@ const getCandidateDashboardData = async (req, res) => {
         // Check if search term is a valid MongoDB ObjectId
         const isObjectId = /^[0-9a-fA-F]{24}$/.test(searchTerm);
         
-        // Build search query - support employeeId, author_id, phone, phone_number, email, and _id
+        // Build search query with case-insensitive matching
+        // Support employeeId, author_id, phone, phone_number, email, name, and _id
         const searchQuery = {
           $or: [
-            { employeeId: searchTerm },
-            { author_id: searchTerm },
+            { employeeId: { $regex: new RegExp(`^${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+            { author_id: { $regex: new RegExp(`^${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
             { phone: searchTerm },
             { phone_number: searchTerm },
-            { email: searchTerm }
+            { email: { $regex: new RegExp(`^${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+            { name: { $regex: new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } }
           ]
         };
         
@@ -301,13 +303,16 @@ const getCandidateDashboardDetail = async (req, res) => {
     const searchTerm = uid.trim();
     const isObjectId = /^[0-9a-fA-F]{24}$/.test(searchTerm);
     
+    // Build search query with case-insensitive matching
+    // Support employeeId, author_id, phone, phone_number, email, name, and _id
     const searchQuery = {
       $or: [
-        { employeeId: searchTerm },
-        { author_id: searchTerm },
+        { employeeId: { $regex: new RegExp(`^${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+        { author_id: { $regex: new RegExp(`^${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
         { phone: searchTerm },
         { phone_number: searchTerm },
-        { email: searchTerm }
+        { email: { $regex: new RegExp(`^${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+        { name: { $regex: new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } }
       ]
     };
     

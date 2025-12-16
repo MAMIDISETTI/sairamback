@@ -653,33 +653,73 @@ const getAllUsers = async (req, res) => {
 
     // Get users from both UserNew and User models
     const User = require('../models/User');
+    const Joiner = require('../models/Joiner');
     
     // Get users from UserNew model
     const newUsers = await UserNew.find(query)
       .select('-password -tempPassword')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
     // Get users from old User model and convert to UserNew format
     const oldUsers = await User.find(query)
       .select('-password -tempPassword')
-      .sort({ createdAt: -1 });
-    // Convert old users to new format
-    const convertedOldUsers = oldUsers.map(user => ({
-      _id: user._id,
-      author_id: user.author_id || user._id.toString(),
-      name: user.name,
-      email: user.email,
-      profileImageUrl: user.profileImageUrl,
-      role: user.role,
-      isActive: user.isActive !== undefined ? user.isActive : true,
-      deactivatedAt: user.deactivatedAt,
-      deactivatedBy: user.deactivatedBy,
-      deactivationReason: user.deactivationReason,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt
-    }));
+      .sort({ createdAt: -1 })
+      .lean();
+    
+    // Get all joiners to map employeeId (NW format)
+    const joiners = await Joiner.find({}).select('author_id email employeeId').lean();
+    const joinerMap = new Map();
+    joiners.forEach(joiner => {
+      if (joiner.author_id) {
+        joinerMap.set(joiner.author_id.toLowerCase(), joiner);
+      }
+      if (joiner.email) {
+        joinerMap.set(joiner.email.toLowerCase(), joiner);
+      }
+    });
+    
+    // Convert old users to new format and include employeeId
+    const convertedOldUsers = oldUsers.map(user => {
+      // Try to get employeeId from joiner (NW format) first
+      let employeeId = user.employeeId;
+      const joiner = user.author_id ? joinerMap.get(user.author_id.toLowerCase()) : 
+                     (user.email ? joinerMap.get(user.email.toLowerCase()) : null);
+      if (joiner && joiner.employeeId) {
+        employeeId = joiner.employeeId;
+      }
+      
+      return {
+        _id: user._id,
+        author_id: user.author_id || user._id.toString(),
+        name: user.name,
+        email: user.email,
+        employeeId: employeeId || user.employeeId,
+        profileImageUrl: user.profileImageUrl,
+        role: user.role,
+        isActive: user.isActive !== undefined ? user.isActive : true,
+        deactivatedAt: user.deactivatedAt,
+        deactivatedBy: user.deactivatedBy,
+        deactivationReason: user.deactivationReason,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      };
+    });
+    
+    // Enrich newUsers with employeeId from joiners if not present
+    const enrichedNewUsers = newUsers.map(user => {
+      // Try to get employeeId from joiner (NW format) if not in user
+      if (!user.employeeId || user.employeeId.startsWith('EMP_')) {
+        const joiner = user.author_id ? joinerMap.get(user.author_id.toLowerCase()) : 
+                       (user.email ? joinerMap.get(user.email.toLowerCase()) : null);
+        if (joiner && joiner.employeeId) {
+          user.employeeId = joiner.employeeId;
+        }
+      }
+      return user;
+    });
 
     // Combine users and remove duplicates based on email
-    const allUsers = [...newUsers, ...convertedOldUsers];
+    const allUsers = [...enrichedNewUsers, ...convertedOldUsers];
     const uniqueUsers = allUsers.filter((user, index, self) => 
       index === self.findIndex(u => u.email === user.email)
     );

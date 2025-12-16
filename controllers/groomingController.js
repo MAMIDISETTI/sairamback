@@ -45,13 +45,7 @@ const markTraineeGrooming = async (req, res) => {
     targetDate.setHours(0, 0, 0, 0); // Normalize to start of day
     const dateKey = targetDate.toISOString().split('T')[0]; // YYYY-MM-DD format
 
-    console.log('Saving grooming data:', {
-      traineeId,
-      date,
-      dateKey,
-      grooming,
-      author_id: trainee.author_id || trainee._id.toString()
-    });
+
 
     if (!groomingReport) {
       // Create new grooming report
@@ -168,7 +162,7 @@ const markTraineeGrooming = async (req, res) => {
       groomingReport.lastUpdatedAt = new Date();
       
       const saved = await groomingReport.save();
-      console.log('Updated grooming report:', saved._id, 'Date key:', dateKey, 'Data:', saved.reportData[dateKey]);
+      // console.log('Updated grooming report:', saved._id, 'Date key:', dateKey, 'Data:', saved.reportData[dateKey]);
     }
 
     res.json({
